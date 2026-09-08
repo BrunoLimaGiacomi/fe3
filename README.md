@@ -16,7 +16,7 @@ git --version
 
 Use sparse checkout para deixar no diretório de trabalho somente o README, o `.gitignore` e o agente escolhido.
 
-Para o agente principal:
+Para o agente de arquitetura:
 
 ```powershell
 git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git agente-global
