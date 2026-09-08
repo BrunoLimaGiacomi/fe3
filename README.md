@@ -2,6 +2,49 @@
 
 Este README é autossuficiente. Ele explica o necessário para instalar, configurar, executar e diagnosticar qualquer distribuição de agente de IA deste repositório, incluindo especializações de GRC, segurança, desenvolvimento ou outras que sejam adicionadas futuramente.
 
+## Como Obter E Atualizar
+
+**Não faça download em ZIP ou por qualquer opção que remova a pasta `.git`. Use o Git instalado no próprio computador.** A clonagem mantém o vínculo com este repositório para que futuras atualizações possam ser recebidas com `git pull`.
+
+Pré-requisito: Git instalado e acesso autorizado ao repositório:
+
+```powershell
+git --version
+git clone https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git
+Set-Location .\uolcs-arq-sec-ias-de-si-maas
+git remote -v
+```
+
+Para atualizar uma cópia já clonada:
+
+```powershell
+Set-Location .\uolcs-arq-sec-ias-de-si-maas
+git status --short
+git pull --ff-only origin main
+```
+
+Execute o `git pull` na mesma pasta clonada. Não apague a pasta e faça novo download para atualizar. Se houver alterações locais, preserve-as e resolva a situação antes do pull; não use `reset --hard` para forçar a atualização.
+
+## Executar As Distribuições Atuais
+
+Execute cada agente a partir da própria pasta de distribuição. Isso garante que o core encontre o `AGENTS.md`, as skills e o `model-aliases.json` correspondentes:
+
+```powershell
+Push-Location .\AgenteGlobal
+py -3 .\AgenteGlobal\AgenteGlobal.py --help
+py -3 .\AgenteGlobal\AgenteGlobal.py
+Pop-Location
+```
+
+```powershell
+Push-Location .\AgenteGRC
+py -3 .\AgenteGRC\AgenteGRC.py --help
+py -3 .\AgenteGRC\AgenteGRC.py
+Pop-Location
+```
+
+Também é possível usar os wrappers `.cmd` dentro de cada pasta de distribuição, por exemplo `.\bin\agenteglobal.cmd` ou `.\bin\agentegrc.cmd`. Para uma nova distribuição, siga o mesmo padrão: entre na pasta dela e execute o arquivo de entrada indicado por `--help`.
+
 ## 1. O que é
 
 O agente é uma interface de terminal para um modelo MaaS compatível com a API OpenAI. A IA principal interpreta o pedido, consulta arquivos e ferramentas autorizadas, pode delegar tarefas e consolida o resultado.
