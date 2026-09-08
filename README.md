@@ -3,7 +3,7 @@ Esse README explica o necessário para instalar, configurar, executar e diagnost
 
 ## Como Obter E Atualizar
 
-**Por padrão, baixe somente um agente.** Não é necessário manter todas as distribuições no computador e não é necessário separar o projeto por branches.
+**Por padrão, baixe somente um agente.** Não é necessário manter todas as distribuições no computador.
 
 **Não faça download em ZIP ou por qualquer opção que remova a pasta `.git`. Use o Git instalado no próprio computador.** A clonagem mantém o vínculo com este repositório para que futuras atualizações possam ser recebidas com `git pull`.
 
