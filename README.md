@@ -288,7 +288,7 @@ chcp 65001
 
 ### A IA propõe uma ação inesperada ou fica presa
 
-Interrompa com `Ctrl+C`, preserve o log, revise o último resultado e reduza o workspace, os escopos, o timeout ou a quantidade de subagentes. Reinicie em `strict` e repita somente após confirmar o plano e o impacto.
+Ela pode ficar apenas 45 segundos sem uma atualização, passado esse tempo, você pode voltar a interagir com ela. Caso ela tenha travado, pergunte a ela o que ocorreu ou apenas diga para ela continuar
 
 ## 13. Limitações
 
