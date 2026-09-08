@@ -15,6 +15,30 @@ Set-Location .\uolcs-arq-sec-ias-de-si-maas
 git remote -v
 ```
 
+### Baixar somente um agente
+
+Não é necessário manter todas as distribuições no computador e não é necessário separar o projeto por branches. Use sparse checkout para deixar no diretório de trabalho somente o README, o `.gitignore` e o agente escolhido:
+
+Para o agente principal:
+
+```powershell
+git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git agente-global
+Set-Location .\agente-global
+git sparse-checkout set --cone AgenteGlobal
+git remote -v
+```
+
+Para GRC:
+
+```powershell
+git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git agente-grc
+Set-Location .\agente-grc
+git sparse-checkout set --cone AgenteGRC
+git remote -v
+```
+
+O repositório continua conectado ao `origin/main`, mas somente a pasta selecionada aparece no diretório de trabalho. A pasta `.git` mantém a conexão e o histórico; ela não deve ser removida. Para trocar o agente sem clonar novamente, use `git sparse-checkout set --cone AgenteGlobal` ou `git sparse-checkout set --cone AgenteGRC`.
+
 Para atualizar uma cópia já clonada:
 
 ```powershell
