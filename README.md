@@ -1,6 +1,5 @@
 # Agentes De IA Locais
-
-Este README é autossuficiente. Ele explica o necessário para instalar, configurar, executar e diagnosticar qualquer distribuição de agente de IA deste repositório, incluindo especializações de GRC, segurança, desenvolvimento ou outras que sejam adicionadas futuramente.
+Esse README explica o necessário para instalar, configurar, executar e diagnosticar qualquer distribuição de agente de IA deste repositório, incluindo especializações de GRC, segurança, desenvolvimento ou outras que sejam adicionadas futuramente.
 
 ## Como Obter E Atualizar
 
