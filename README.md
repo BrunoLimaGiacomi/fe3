@@ -4,20 +4,17 @@ Este README é autossuficiente. Ele explica o necessário para instalar, configu
 
 ## Como Obter E Atualizar
 
+**Por padrão, baixe somente um agente.** Não é necessário manter todas as distribuições no computador e não é necessário separar o projeto por branches.
+
 **Não faça download em ZIP ou por qualquer opção que remova a pasta `.git`. Use o Git instalado no próprio computador.** A clonagem mantém o vínculo com este repositório para que futuras atualizações possam ser recebidas com `git pull`.
 
 Pré-requisito: Git instalado e acesso autorizado ao repositório:
 
 ```powershell
 git --version
-git clone https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git
-Set-Location .\uolcs-arq-sec-ias-de-si-maas
-git remote -v
 ```
 
-### Baixar somente um agente
-
-Não é necessário manter todas as distribuições no computador e não é necessário separar o projeto por branches. Use sparse checkout para deixar no diretório de trabalho somente o README, o `.gitignore` e o agente escolhido:
+Use sparse checkout para deixar no diretório de trabalho somente o README, o `.gitignore` e o agente escolhido.
 
 Para o agente principal:
 
@@ -42,7 +39,7 @@ O repositório continua conectado ao `origin/main`, mas somente a pasta selecion
 Para atualizar uma cópia já clonada:
 
 ```powershell
-Set-Location .\uolcs-arq-sec-ias-de-si-maas
+Set-Location .\<pasta-local-escolhida>
 git status --short
 git pull --ff-only origin main
 ```
