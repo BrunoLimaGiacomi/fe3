@@ -1,0 +1,17 @@
+# Dados gerados em tempo de execução
+**/logs/
+**/historico/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Credenciais e arquivos locais sensíveis
+.env
+.env.*
+**/AgentA.txt
+**/api-key.txt
+*.key
+*.pem
+*.p12
+*.pfx
