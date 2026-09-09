@@ -65,6 +65,14 @@ Pop-Location
 
 Também é possível usar os wrappers `.cmd` dentro de cada pasta de distribuição, por exemplo `.\bin\agenteglobal.cmd` ou `.\bin\agentegrc.cmd`. Para uma nova distribuição, siga o mesmo padrão: entre na pasta dela e execute o arquivo de entrada indicado por `--help`.
 
+Os exemplos acima usam o Python registrado no Windows (`py -3`). Se você criou o `.venv`, execute os mesmos comandos com `..\.venv\Scripts\python.exe` depois de entrar na pasta da distribuição:
+
+```powershell
+Push-Location .\AgenteGlobal
+..\.venv\Scripts\python.exe .\AgenteGlobal\AgenteGlobal.py --help
+Pop-Location
+```
+
 ## 1. O que é
 
 O agente é uma interface de terminal para um modelo MaaS compatível com a API OpenAI. A IA principal interpreta o pedido, consulta arquivos e ferramentas autorizadas, pode delegar tarefas e consolida o resultado.
@@ -106,6 +114,7 @@ Para manter as dependências isoladas, é possível usar um ambiente virtual. Ne
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install --upgrade "openai>=1.0" "prompt-toolkit>=3.0" "rich>=13.0"
+.\.venv\Scripts\python.exe -c "import openai, prompt_toolkit, rich; print('Dependencias OK')"
 .\.venv\Scripts\python.exe -m pip check
 ```
 
@@ -165,8 +174,12 @@ O painel deve conter somente valores editáveis e explicações. Ele pode contro
 Edite somente os parâmetros documentados no próprio painel e reinicie o agente depois da alteração:
 
 ```powershell
+Push-Location .\<pasta-da-distribuicao>
 py -3 .\Painel.py
+Pop-Location
 ```
+
+Se estiver usando `.venv`, troque `py -3` por `..\.venv\Scripts\python.exe` nesse bloco.
 
 Os limites de segurança e de validação do core continuam valendo mesmo quando um valor do painel é alterado.
 
