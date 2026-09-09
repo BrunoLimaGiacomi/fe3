@@ -71,31 +71,45 @@ O agente é uma interface de terminal para um modelo MaaS compatível com a API 
 
 O modelo não substitui a aprovação humana em decisões de risco, alterações relevantes ou declarações de conformidade. A resposta deve separar fatos observados, inferências, premissas e lacunas.
 
-## 2. Requisitos
+## 2. Pré-requisitos
 
-- Windows e PowerShell.
-- Python 3.11 ou superior.
+- Windows 64-bit x86-64 (AMD64) e PowerShell. Use [Git for Windows](https://gitforwindows.org/) com suporte a [sparse checkout](https://git-scm.com/docs/git-sparse-checkout).
+- Python 3.11 ou superior para Windows 64-bit x86-64. Baixe o instalador **Windows installer (64-bit)** na [página oficial do Python](https://www.python.org/downloads/windows/). Não use o instalador ARM64 em computadores AMD64.
 - Acesso de rede ao endpoint MaaS.
+- Acesso autorizado ao repositório privado no GitHub.
 - API key válida, provisionada conforme a seção 3.
 - Permissão local para o workspace usado pelo agente.
 
-Instale as dependências no mesmo Python que executará o agente:
+Confirme o ambiente no PowerShell:
 
 ```powershell
-py -3 -m pip install --upgrade "openai>=1.0" prompt_toolkit rich
-py -3 -c "import sys; print(sys.executable)"
-py -3 -c "import pydantic_core, pydantic, openai; print('Dependencias OK')"
+git --version
+py -3 --version
+py -3 -m pip --version
 ```
 
-Para manter as dependências isoladas, é possível usar um ambiente virtual:
+As bibliotecas externas usadas diretamente pelos agentes são [`openai`](https://github.com/openai/openai-python), [`prompt-toolkit`](https://pypi.org/project/prompt-toolkit/) e [`rich`](https://pypi.org/project/rich/). `pydantic` e `pydantic-core` são instaladas automaticamente como dependências do SDK OpenAI. Instale e valide tudo no mesmo interpretador que fará a execução:
+
+```powershell
+py -3 -m pip install --upgrade pip
+py -3 -m pip install --upgrade "openai>=1.0" "prompt-toolkit>=3.0" "rich>=13.0"
+py -3 -c "import sys; print(sys.executable)"
+py -3 -c "import openai, prompt_toolkit, rich; print('Dependencias OK')"
+py -3 -m pip check
+```
+
+O comando instala `openai`, `prompt-toolkit` e `rich`, além das bibliotecas auxiliares exigidas pelo `openai`, como `pydantic` e `pydantic-core`.
+
+Para manter as dependências isoladas, é possível usar um ambiente virtual. Nesse caso, use o Python do ambiente virtual também para executar o agente:
 
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install --only-binary=:all: "openai>=1.0" prompt_toolkit rich
+.\.venv\Scripts\python.exe -m pip install --upgrade "openai>=1.0" "prompt-toolkit>=3.0" "rich>=13.0"
+.\.venv\Scripts\python.exe -m pip check
 ```
 
-Use sempre o mesmo interpretador para instalar os pacotes e executar o agente.
+Use sempre o mesmo interpretador para instalar os pacotes e executar o agente. Não é necessário instalar Node.js, GCC ou compiladores C para os agentes atuais.
 
 ## 3. API key do MaaS
 
