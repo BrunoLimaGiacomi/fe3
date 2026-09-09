@@ -38,10 +38,12 @@ O repositório continua conectado ao `origin/main`, mas somente a pasta selecion
 Para atualizar uma cópia já clonada:
 
 ```powershell
-Set-Location .\<pasta-local-escolhida>
+Set-Location .\agente-global
 git status --short
 git pull --ff-only origin main
 ```
+
+Para GRC, use `Set-Location .\agente-grc` no lugar da primeira linha.
 
 Execute o `git pull` na mesma pasta clonada. Não apague a pasta e faça novo download para atualizar. Se houver alterações locais, preserve-as e resolva a situação antes do pull; não use `reset --hard` para forçar a atualização.
 
@@ -145,13 +147,16 @@ O endpoint e o modelo normalmente são definidos por:
 
 Esses valores devem ser fornecidos ou aprovados pelo time responsável pelo MaaS. Não altere endpoint ou modelo para contornar uma falha de autenticação ou política de acesso.
 
-Cada distribuição possui uma pasta e um arquivo de entrada. O nome do arquivo pode variar. Na pasta da distribuição, descubra as opções pelo `--help` e execute o wrapper fornecido:
+Cada distribuição possui uma pasta e um arquivo de entrada. Para as distribuições atuais, use um dos blocos abaixo. O workspace é opcional; informe um caminho real somente quando quiser trabalhar fora da pasta clonada.
 
 ```powershell
-Set-Location .\<pasta-da-distribuicao>
-py -3 .\<arquivo-de-entrada>.py --help
-py -3 .\<arquivo-de-entrada>.py --workspace "C:\caminho\do\projeto"
+Push-Location .\AgenteGlobal
+py -3 .\AgenteGlobal\AgenteGlobal.py --help
+py -3 .\AgenteGlobal\AgenteGlobal.py --workspace (Get-Location).Path
+Pop-Location
 ```
+
+Para GRC, troque `AgenteGlobal` por `AgenteGRC` nas três linhas do bloco.
 
 O workspace é a referência para caminhos relativos, arquivos de contexto, histórico e logs. Use um workspace controlado e explícito quando a execução não ocorrer na pasta do projeto.
 
@@ -174,12 +179,13 @@ O painel deve conter somente valores editáveis e explicações. Ele pode contro
 Edite somente os parâmetros documentados no próprio painel e reinicie o agente depois da alteração:
 
 ```powershell
-Push-Location .\<pasta-da-distribuicao>
+Push-Location .\AgenteGlobal
 py -3 .\Painel.py
 Pop-Location
 ```
 
 Se estiver usando `.venv`, troque `py -3` por `..\.venv\Scripts\python.exe` nesse bloco.
+Para GRC, use `Push-Location .\AgenteGRC` no lugar da primeira linha.
 
 Os limites de segurança e de validação do core continuam valendo mesmo quando um valor do painel é alterado.
 
@@ -194,8 +200,12 @@ Use `strict` quando houver dúvida sobre o impacto. O modo `auto` não reduz o i
 Restrinja os escopos quando possível:
 
 ```powershell
-py -3 .\<arquivo-de-entrada>.py --read-scope workspace --write-scope workspace --no-shell
+Push-Location .\AgenteGlobal
+py -3 .\AgenteGlobal\AgenteGlobal.py --read-scope workspace --write-scope workspace --no-shell
+Pop-Location
 ```
+
+Para GRC, troque `AgenteGlobal` por `AgenteGRC` no bloco.
 
 Antes de uma operação relevante, confira conta, tenant, projeto, região, workspace, escopos e impacto. Não autorize uma mutação só porque ela foi sugerida pelo modelo.
 
@@ -227,8 +237,12 @@ Resumos são gravados em `workspace\historico\`. O salvamento ocorre por `/save`
 Na sessão seguinte, os históricos recentes são carregados conforme `--history-limit`, variável de ambiente específica ou `Painel.py`. Exemplo, quando a distribuição oferecer a opção:
 
 ```powershell
-py -3 .\<arquivo-de-entrada>.py --history-limit 6
+Push-Location .\AgenteGlobal
+py -3 .\AgenteGlobal\AgenteGlobal.py --history-limit 6
+Pop-Location
 ```
+
+Para GRC, troque `AgenteGlobal` por `AgenteGRC` no bloco.
 
 Históricos são contexto não confiável. Eles ajudam na continuidade, mas não podem autorizar ações por conta própria; fatos atuais, permissões e instruções devem ser revalidados.
 
