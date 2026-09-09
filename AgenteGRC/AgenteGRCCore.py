@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import datetime
 from getpass import getpass
@@ -21,6 +22,19 @@ from pathlib import Path
 from typing import Any
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, OpenAIError
+from Painel import (
+    DEFAULT_API_RETRIES,
+    DEFAULT_API_TIMEOUT_SECONDS,
+    DEFAULT_GOAL_MAX_ITERATIONS,
+    DEFAULT_HISTORY_FILES,
+    DEFAULT_MAX_SEARCH_SCANNED_FILES,
+    DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_SUBAGENTS,
+    DEFAULT_SUBAGENT_MAX_STEPS,
+    DEFAULT_TIMEOUT_SECONDS,
+    INITIAL_STEP_BUDGET,
+    STEP_BUDGET_INCREMENT,
+)
 
 try:
     from prompt_toolkit import PromptSession
@@ -78,16 +92,7 @@ DEFAULT_MODEL_ALIASES = {
     "maas-current": DEFAULT_MODEL,
     "glm-current": DEFAULT_MODEL,
 }
-DEFAULT_MAX_STEPS = 64
-INITIAL_STEP_BUDGET = 8
-STEP_BUDGET_INCREMENT = 8
 MAX_ALLOWED_STEPS = 128
-DEFAULT_MAX_SUBAGENTS = 3
-DEFAULT_SUBAGENT_MAX_STEPS = 4
-DEFAULT_GOAL_MAX_ITERATIONS = 5
-DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_API_TIMEOUT_SECONDS = 45.0
-DEFAULT_API_RETRIES = 1
 MAX_API_RETRIES = 5
 HISTORY_SUMMARY_TIMEOUT_SECONDS = 15.0
 MAX_API_KEY_FILE_BYTES = 10_000
@@ -99,16 +104,50 @@ MAX_CONTEXT_FILE_BYTES = 80_000
 MAX_CONTEXT_TOTAL_BYTES = 240_000
 MAX_HISTORY_TRANSCRIPT_CHARS = 60_000
 MAX_HISTORY_FILE_BYTES = 40_000
-DEFAULT_HISTORY_FILES = 5
 MAX_HISTORY_FILES = 20
 MAX_HISTORY_SUMMARY_CHARS = 24_000
 MAX_READ_BYTES = 250_000
 MAX_WRITE_BYTES = 1_000_000
-DEFAULT_MAX_SEARCH_SCANNED_FILES = 5000
 HISTORY_DIR_NAME = "historico"
 LOG_DIR_NAME = "logs"
 LOG_FILE_MAX_BYTES = 1_000_000
 LOG_FILE_BACKUP_COUNT = 3
+
+
+def validate_panel_configuration() -> None:
+    integer_settings = (
+        ("DEFAULT_MAX_STEPS", DEFAULT_MAX_STEPS, 1, MAX_ALLOWED_STEPS),
+        ("INITIAL_STEP_BUDGET", INITIAL_STEP_BUDGET, 1, MAX_ALLOWED_STEPS),
+        ("STEP_BUDGET_INCREMENT", STEP_BUDGET_INCREMENT, 1, MAX_ALLOWED_STEPS),
+        ("DEFAULT_MAX_SUBAGENTS", DEFAULT_MAX_SUBAGENTS, 0, 10),
+        ("DEFAULT_SUBAGENT_MAX_STEPS", DEFAULT_SUBAGENT_MAX_STEPS, 1, 15),
+        ("DEFAULT_GOAL_MAX_ITERATIONS", DEFAULT_GOAL_MAX_ITERATIONS, 1, 20),
+        ("DEFAULT_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS, 1, 120),
+        ("DEFAULT_API_RETRIES", DEFAULT_API_RETRIES, 0, MAX_API_RETRIES),
+        ("DEFAULT_HISTORY_FILES", DEFAULT_HISTORY_FILES, 1, MAX_HISTORY_FILES),
+        ("DEFAULT_MAX_SEARCH_SCANNED_FILES", DEFAULT_MAX_SEARCH_SCANNED_FILES, 1, 20_000),
+    )
+    errors: list[str] = []
+    for name, value, minimum, maximum in integer_settings:
+        if isinstance(value, bool) or not isinstance(value, int):
+            errors.append(f"{name} precisa ser inteiro")
+        elif value < minimum or value > maximum:
+            errors.append(f"{name} precisa estar entre {minimum} e {maximum}")
+
+    if (
+        isinstance(DEFAULT_API_TIMEOUT_SECONDS, bool)
+        or not isinstance(DEFAULT_API_TIMEOUT_SECONDS, (int, float))
+        or DEFAULT_API_TIMEOUT_SECONDS < 5
+        or DEFAULT_API_TIMEOUT_SECONDS > 300
+    ):
+        errors.append("DEFAULT_API_TIMEOUT_SECONDS precisa estar entre 5 e 300")
+
+    if errors:
+        raise ValueError("Configuração inválida em Painel.py: " + "; ".join(errors))
+
+
+validate_panel_configuration()
+
 PERMISSION_MODES = {
     "strict": "pede aprovação para toda escrita e toda execução de CLI",
     "balanced": "pede aprovação para overwrite, caminhos sensíveis e comandos destrutivos ou mutáveis",
@@ -197,6 +236,7 @@ SLASH_COMMANDS = {
     "/plan": "Entra no modo planejamento ou gera um plano",
     "/chat": "Volta para o chat padrão",
     "/goal": "Executa um objetivo iterativo",
+    "/spawn": "Executa subagente com mutação: /spawn [--read-only] <tarefa>",
     "/workspace": "Mostra o workspace base de escrita/execução",
     "/save": "Salva resumo da sessão em historico/",
     "/clear": "Limpa o histórico da conversa",
@@ -209,6 +249,8 @@ SLASH_ALIASES = {
     "/q": "/exit",
     "/limpar": "/clear",
     "/salvar": "/save",
+    "/subagent": "/spawn",
+    "/subagente": "/spawn",
     "/default": "/chat",
     "/verbosidade": "/verbosity",
     "/verbose": "/verbosity",
@@ -1798,6 +1840,7 @@ class WorkspaceTools:
         self.temperature = temperature
         self.allow_write = allow_write
         self.subagents_started = 0
+        self._subagent_lock = threading.Lock()
 
     def extract_path_reference(self, raw_path: str) -> tuple[str | None, str]:
         if not raw_path:
@@ -2206,14 +2249,12 @@ class WorkspaceTools:
         name: str = "subagente",
         scope: str = "",
         max_steps: int | None = None,
-        allow_mutation: bool = False,
+        allow_mutation: bool = True,
     ) -> str:
         if self.client is None or not self.model:
             raise PermissionError("Subagentes indisponíveis: cliente/modelo não foram configurados.")
         if self.config.max_subagents < 1:
             raise PermissionError("Subagentes desativados por --max-subagents 0.")
-        if self.subagents_started >= self.config.max_subagents:
-            raise RuntimeError(f"Limite de {self.config.max_subagents} subagentes atingido neste pedido.")
 
         task = task.strip()
         name = name.strip() or "subagente"
@@ -2240,7 +2281,10 @@ class WorkspaceTools:
 
         requested_steps = max_steps if max_steps is not None else self.config.subagent_max_steps
         bounded_steps = max(1, min(int(requested_steps), self.config.subagent_max_steps))
-        self.subagents_started += 1
+        with self._subagent_lock:
+            if self.subagents_started >= self.config.max_subagents:
+                raise RuntimeError(f"Limite de {self.config.max_subagents} subagentes atingido neste pedido.")
+            self.subagents_started += 1
 
         sub_config = replace(
             self.config,
@@ -2524,10 +2568,10 @@ def build_tool_schemas(
                             },
                             "allow_mutation": {
                                 "type": "boolean",
-                                "default": False,
+                                "default": True,
                                 "description": (
-                                    "Quando true, permite write_file, run_cli e run_powershell ao subagente, "
-                                    "respeitando o /mode da sessão. Use só se o usuário pediu mutação."
+                                    "Por padrão permite write_file, run_cli e run_powershell ao subagente, "
+                                    "respeitando o /mode da sessão. Defina false para execução somente leitura."
                                 ),
                             },
                         },
@@ -2776,6 +2820,7 @@ def print_help(config: AgentConfig) -> None:
         security_table.add_row("Workspace", str(config.workspace))
         security_table.add_row("Arquivo da API key", str(config.api_key_file))
         security_table.add_row("Arquivo de aliases", str(config.model_alias_file))
+        security_table.add_row("Painel", str(Path(__file__).with_name("Painel.py")))
         security_table.add_row("AGENTS.md", str(config.agents_file) if config.load_project_context else "desabilitado")
         security_table.add_row("Skills locais", str(config.skills_dir) if config.load_project_context else "desabilitado")
         security_table.add_row(
@@ -2833,6 +2878,7 @@ Segurança:
   Workspace: {config.workspace}
   Arquivo da API key: {config.api_key_file}
   Arquivo de aliases: {config.model_alias_file}
+  Painel: {Path(__file__).with_name("Painel.py")}
   AGENTS.md: {config.agents_file if config.load_project_context else "desabilitado"}
   Skills locais: {config.skills_dir if config.load_project_context else "desabilitado"}
   Histórico: {config.workspace / HISTORY_DIR_NAME} {"(carrega últimos " + str(config.history_limit) + ")" if config.load_project_context else "(auto-load desabilitado)"}
@@ -2907,7 +2953,7 @@ def describe_tool_activity(tool_name: str, arguments: dict[str, Any], step: int,
     if tool_name == "spawn_subagent":
         name = str(arguments.get("name", "subagente"))
         task = truncate_single_line(str(arguments.get("task", "")), limit=180)
-        allow_mutation = bool(arguments.get("allow_mutation", False))
+        allow_mutation = bool(arguments.get("allow_mutation", True))
         return prefix + f"acionando subagente `{name}` (mutação={allow_mutation}) para `{task}`."
     return prefix + "executando ferramenta solicitada pelo modelo."
 
@@ -3496,28 +3542,46 @@ def run_agent_until_final(
         )
         task_board.start_batch(batch)
 
-        for task, (tool_call, tool_name, arguments, parse_error_result) in zip(batch, prepared_tool_calls):
-            if parse_error_result is not None:
-                result = parse_error_result
-            else:
-                try:
-                    result = tools_runner.execute(tool_name, arguments)
-                except ValueError as exc:
-                    result = to_json({"error": "ValueError", "message": str(exc)})
-                except Exception as exc:
-                    if emit_tools:
-                        task_board.fail_task(task, f"{exc.__class__.__name__}: {truncate_single_line(str(exc), 120)}")
-                        task_board.finish(failed=True)
-                    raise
-            if emit_tools:
-                task_board.complete_task(task, tool_name, result)
+        results: list[str | None] = [None] * len(prepared_tool_calls)
+        run_subagents_in_parallel = len(prepared_tool_calls) > 1 and all(
+            tool_name == "spawn_subagent"
+            and parse_error_result is None
+            and not bool(arguments.get("allow_mutation", True))
+            for _, tool_name, arguments, parse_error_result in prepared_tool_calls
+        )
 
+        if run_subagents_in_parallel:
+            max_workers = max(1, min(len(prepared_tool_calls), tools_runner.config.max_subagents))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="agentegrc-subagent") as executor:
+                future_indexes = {
+                    executor.submit(tools_runner.execute, tool_name, arguments): index
+                    for index, (_, tool_name, arguments, _) in enumerate(prepared_tool_calls)
+                }
+                for future in as_completed(future_indexes):
+                    index = future_indexes[future]
+                    result = future.result()
+                    results[index] = result
+                    if emit_tools:
+                        task_board.complete_task(batch[index], "spawn_subagent", result)
+        else:
+            for index, (task, (_, tool_name, arguments, parse_error_result)) in enumerate(
+                zip(batch, prepared_tool_calls)
+            ):
+                if parse_error_result is not None:
+                    result = parse_error_result
+                else:
+                    result = tools_runner.execute(tool_name, arguments)
+                results[index] = result
+                if emit_tools:
+                    task_board.complete_task(task, tool_name, result)
+
+        for result, (tool_call, tool_name, _, _) in zip(results, prepared_tool_calls):
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "name": tool_name,
-                    "content": truncate_text(result),
+                    "content": truncate_text(result or ""),
                 }
             )
 
@@ -3641,6 +3705,7 @@ def agent_loop(
 
     print_labeled(f"{AGENT_NAME} CLI", style="cyan")
     print_labeled("Modelo:", model, style="cyan")
+    print_labeled("Painel:", str(Path(__file__).with_name("Painel.py")), style="gray", content_style="gray")
     print_labeled(
         "API:",
         f"timeout={config.api_timeout_seconds:g}s, retries={config.api_retries}",
@@ -3784,6 +3849,82 @@ def agent_loop(
             conversation_mode = "chat"
             messages.append({"role": "system", "content": "Modo padrão de chat ativo."})
             print(f"{CYAN}Modo>{RESET} chat")
+            continue
+        spawn_prefixes = ("/spawn", "/subagent", "/subagente")
+        if command in spawn_prefixes or any(command.startswith(f"{prefix} ") for prefix in spawn_prefixes):
+            parts = user_input.split(maxsplit=1)
+            spawn_body = parts[1].strip() if len(parts) > 1 else ""
+            allow_mutation = True
+            read_only_flags = ("--read-only", "--readonly", "--read")
+            matched_read_only = next(
+                (
+                    flag
+                    for flag in read_only_flags
+                    if spawn_body.lower() == flag or spawn_body.lower().startswith(f"{flag} ")
+                ),
+                None,
+            )
+            if matched_read_only:
+                allow_mutation = False
+                spawn_body = spawn_body[len(matched_read_only) :].strip()
+            elif spawn_body.lower() == "--write" or spawn_body.lower().startswith("--write "):
+                spawn_body = spawn_body[len("--write") :].strip()
+            if not spawn_body:
+                print(f"{YELLOW}Uso: /spawn [--read-only] <tarefa objetiva>{RESET}")
+                continue
+            if conversation_mode == "plan" and allow_mutation:
+                print(
+                    f"{YELLOW}Modo /plan não permite subagente com mutação. "
+                    f"Use /spawn --read-only <tarefa> ou volte com /chat.{RESET}"
+                )
+                continue
+
+            tools_runner.subagents_started = 0
+            result = tools_runner.execute(
+                "spawn_subagent",
+                {
+                    "task": spawn_body,
+                    "name": "manual",
+                    "scope": "Invocação explícita pelo operador.",
+                    "allow_mutation": allow_mutation,
+                },
+            )
+            try:
+                parsed_result = json.loads(result)
+            except json.JSONDecodeError:
+                parsed_result = {"error": "InvalidSubagentResult", "message": result}
+
+            messages.append({"role": "user", "content": user_input})
+            if parsed_result.get("error"):
+                error_message = str(parsed_result.get("message") or parsed_result["error"])
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": f"A invocação manual do subagente falhou: {error_message}",
+                    }
+                )
+                if parsed_result.get("error") in {"APIConnectionError", "APITimeoutError"}:
+                    api_available = False
+                print_labeled("Subagente>", error_message, style="red", content_style="red")
+                continue
+
+            subagent_name = str(parsed_result.get("subagent") or "manual")
+            subagent_status = str(parsed_result.get("status") or "incomplete")
+            subagent_answer = str(parsed_result.get("answer") or "Sem resposta.")
+            result_style = "green" if subagent_status == "completed" else "yellow"
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": f"Resultado do subagente {subagent_name} ({subagent_status}):\n{subagent_answer}",
+                }
+            )
+            api_available = True
+            print_labeled(
+                f"Subagente {subagent_name}>",
+                subagent_answer,
+                style=result_style,
+                content_style=result_style,
+            )
             continue
         if command == "/goal" or command.startswith("/goal "):
             goal_body = user_input[5:].strip()
