@@ -1,9 +1,15 @@
-import subprocess, json, urllib.request, urllib.error
+import json
+import subprocess
+import urllib.error
+import urllib.request
 
 # Get access token
 token_result = subprocess.run(
     ["gcloud", "auth", "print-access-token"],
-    capture_output=True, text=True, shell=True, timeout=30
+    capture_output=True,
+    text=True,
+    shell=True,
+    timeout=30,
 )
 token = token_result.stdout.strip()
 print("Token obtained:", bool(token))
@@ -17,20 +23,22 @@ filt = (
 )
 
 # Call the Logging REST API
-payload = json.dumps({
-    "filter": filt,
-    "pageSize": 50,
-    "resourceNames": ["projects/uolcs-caribe-qa"]
-}).encode("utf-8")
+payload = json.dumps(
+    {
+        "filter": filt,
+        "pageSize": 50,
+        "resourceNames": ["projects/uolcs-caribe-qa"],
+    }
+).encode("utf-8")
 
 req = urllib.request.Request(
     "https://logging.googleapis.com/v2/entries:list",
     data=payload,
     headers={
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     },
-    method="POST"
+    method="POST",
 )
 
 try:
@@ -46,7 +54,7 @@ try:
             req_data = proto.get("request", {})
             policy_delta = proto.get("serviceData", {}).get("policyDelta", {})
             binding_deltas = policy_delta.get("bindingDeltas", [])
-            print(f"--- Entry {i+1} ---")
+            print(f"--- Entry {i + 1} ---")
             print(f"  Timestamp: {ts}")
             print(f"  Method: {method}")
             print(f"  Principal: {auth}")

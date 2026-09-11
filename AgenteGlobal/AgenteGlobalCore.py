@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
@@ -74,12 +75,14 @@ READ_SCOPE_ENV = "AGENTEGLOBAL_READ_SCOPE"
 WRITE_SCOPE_ENV = "AGENTEGLOBAL_WRITE_SCOPE"
 VERBOSITY_MODE_ENV = "AGENTEGLOBAL_VERBOSITY"
 HISTORY_LIMIT_ENV = "AGENTEGLOBAL_HISTORY_LIMIT"
+PROFILES_DIR_ENV = "AGENTEGLOBAL_PROFILES_DIR"
 
 DEFAULT_API_KEY_FILE = Path.home() / "cred" / "AgentA.txt"
 DEFAULT_BASE_URL = "https://api-ap-southeast-1.modelarts-maas.com/openai/v1"
 DEFAULT_MODEL = "glm-5.2"
 DEFAULT_MODEL_ALIAS = "primary"
 DEFAULT_MODEL_ALIAS_FILE = "model-aliases.json"
+DEFAULT_PROFILES_DIR = "agents"
 DEFAULT_MODEL_ALIASES = {
     "primary": "maas-current",
     "default": "maas-current",
@@ -93,7 +96,15 @@ HISTORY_SUMMARY_TIMEOUT_SECONDS = 15.0
 MAX_API_KEY_FILE_BYTES = 10_000
 MAX_MODEL_ALIAS_FILE_BYTES = 20_000
 MAX_MODEL_ALIAS_DEPTH = 10
+MAX_PROFILE_FILE_BYTES = 40_000
+MAX_PROFILE_INSTRUCTIONS_CHARS = 24_000
+MAX_PROFILE_COUNT = 20
+MAX_PROFILE_NAME_CHARS = 80
+MAX_PROFILE_DESCRIPTION_CHARS = 500
+MAX_PROFILE_TOTAL_INSTRUCTIONS_CHARS = 80_000
 MAX_SUBAGENT_TASK_CHARS = 4000
+MAX_USER_INPUT_CHARS = 80_000
+MAX_API_MESSAGE_CHARS = 300_000
 MAX_TOOL_OUTPUT_CHARS = 12000
 MAX_CONTEXT_FILE_BYTES = 80_000
 MAX_CONTEXT_TOTAL_BYTES = 240_000
@@ -219,6 +230,7 @@ _RICH_CONSOLE: Any | None = None
 LOGGER = logging.getLogger(AGENT_SLUG)
 LOGGER.addHandler(logging.NullHandler())
 DIAGNOSTIC_LOG_PATH: Path | None = None
+_TASK_BOARD_CONTEXT = threading.local()
 
 Message = dict[str, Any]
 
@@ -231,7 +243,7 @@ SLASH_COMMANDS = {
     "/plan": "Entra no modo planejamento ou gera um plano",
     "/chat": "Volta para o chat padrão",
     "/goal": "Executa um objetivo iterativo",
-    "/spawn": "Executa subagente com mutação: /spawn [--read-only] <tarefa>",
+    "/spawn": "Executa subagente com personalidade: /spawn [--profile nome] [--read-only] <tarefa>",
     "/workspace": "Mostra o workspace base de escrita/execução",
     "/save": "Salva resumo da sessão em historico/",
     "/clear": "Limpa o histórico da conversa",
@@ -488,6 +500,7 @@ class TerminalTaskBoard:
     COMPLETE_FOOTER = "Complete."
     WARNING_FOOTER = "Complete with recovered failures."
     FAILED_FOOTER = "Execution stopped."
+    APPROVAL_FOOTER = "Aguardando aprovação do operador..."
 
     def __init__(self, max_slots: int, enabled: bool = True) -> None:
         self.max_slots = max(1, max_slots)
@@ -499,6 +512,7 @@ class TerminalTaskBoard:
         self._lock = threading.RLock()
         self._stop_refresh = threading.Event()
         self._refresh_thread: threading.Thread | None = None
+        self._live_refresh_disabled = False
 
     def add_batch(
         self,
@@ -571,6 +585,21 @@ class TerminalTaskBoard:
             footer = self.COMPLETE_FOOTER
         self.render(footer=footer)
 
+    def pause_for_approval(self) -> None:
+        """Interrompe o refresh para não sobrescrever nem repetir o prompt de aprovação."""
+        with self._lock:
+            self._live_refresh_disabled = True
+        self._stop_refresh_loop()
+        self.render(footer=self.APPROVAL_FOOTER)
+        with self._lock:
+            self._rendered_lines = 0
+
+    def resume_after_approval(self) -> None:
+        with self._lock:
+            active = not self._final and any(task.status == "running" for task in self.tasks)
+        if active:
+            self._start_refresh()
+
     def render(self, footer: str = ACTIVE_FOOTER) -> None:
         with self._lock:
             if not self.enabled or not self.tasks:
@@ -584,7 +613,7 @@ class TerminalTaskBoard:
             self._rendered_lines = len(lines)
 
     def _start_refresh(self) -> None:
-        if not self.enabled or not sys.stdout.isatty():
+        if not self.enabled or self._live_refresh_disabled or not sys.stdout.isatty():
             return
         if self._refresh_thread is not None and self._refresh_thread.is_alive():
             return
@@ -748,6 +777,7 @@ class AgentConfig:
     model_alias_file: Path
     agents_file: Path
     skills_dir: Path
+    profiles_dir: Path
     read_scope: str
     write_scope: str
     load_project_context: bool
@@ -761,6 +791,22 @@ class AgentConfig:
     max_steps: int
     max_subagents: int
     subagent_max_steps: int
+
+
+@dataclass(frozen=True)
+class AgentProfile:
+    identifier: str
+    name: str
+    description: str
+    developer_instructions: str
+
+
+class ApprovalUnavailableError(RuntimeError):
+    """O runtime precisava de aprovação, mas o terminal não ofereceu entrada."""
+
+
+class PromptTooLargeError(ValueError):
+    """A solicitação ativa não cabe com segurança no contexto enviado ao MaaS."""
 
 
 @dataclass(frozen=True)
@@ -823,6 +869,14 @@ def parse_args() -> argparse.Namespace:
         "--skills-dir",
         default="skills",
         help="Diretório com skills locais. Caminhos relativos são resolvidos a partir do workspace. Padrão: skills",
+    )
+    parser.add_argument(
+        "--profiles-dir",
+        default=os.getenv(PROFILES_DIR_ENV, DEFAULT_PROFILES_DIR),
+        help=(
+            "Diretório com personalidades TOML dos subagentes. Caminhos relativos são resolvidos "
+            f"a partir do workspace. Padrão: variável {PROFILES_DIR_ENV} ou {DEFAULT_PROFILES_DIR}"
+        ),
     )
     parser.add_argument(
         "--no-project-context",
@@ -1010,6 +1064,113 @@ def is_path_inside_workspace(workspace: Path, path: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def load_agent_profiles(config: AgentConfig) -> dict[str, AgentProfile]:
+    profiles_dir = config.profiles_dir.resolve()
+    ensure_path_inside_workspace(config.workspace, profiles_dir)
+    if not profiles_dir.exists():
+        return {}
+    if not profiles_dir.is_dir():
+        raise NotADirectoryError(f"Diretório de personalidades inválido: {profiles_dir}")
+
+    profile_paths = sorted(profiles_dir.glob("*.toml"), key=lambda path: path.name.lower())
+    if len(profile_paths) > MAX_PROFILE_COUNT:
+        raise ValueError(f"Máximo de {MAX_PROFILE_COUNT} perfis TOML permitido em {profiles_dir}")
+
+    profiles: dict[str, AgentProfile] = {}
+    total_instructions_chars = 0
+    allowed_fields = {"name", "description", "developer_instructions"}
+    for profile_path in profile_paths:
+        if profile_path.is_symlink():
+            raise ValueError(f"Link simbólico não é permitido em perfis: {profile_path.name}")
+        resolved_profile = profile_path.resolve()
+        ensure_path_inside_workspace(profiles_dir, resolved_profile)
+        if resolved_profile.stat().st_size > MAX_PROFILE_FILE_BYTES:
+            raise ValueError(f"Perfil maior que {MAX_PROFILE_FILE_BYTES} bytes: {profile_path.name}")
+        identifier = profile_path.stem.lower()
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", identifier):
+            raise ValueError(f"Nome de perfil inválido: {profile_path.name}")
+        try:
+            raw_profile = tomllib.loads(resolved_profile.read_text(encoding="utf-8-sig"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise ValueError(f"Perfil TOML inválido: {profile_path.name}: {exc}") from exc
+        unknown_fields = sorted(set(raw_profile) - allowed_fields)
+        if unknown_fields:
+            raise ValueError(
+                f"Campos não permitidos em {profile_path.name}: {', '.join(unknown_fields)}. "
+                "Perfis não podem alterar modelo, endpoint, ferramentas ou permissões."
+            )
+        name = raw_profile.get("name")
+        description = raw_profile.get("description")
+        instructions = raw_profile.get("developer_instructions")
+        if not all(isinstance(value, str) and value.strip() for value in (name, description, instructions)):
+            raise ValueError(
+                f"Perfil {profile_path.name} precisa conter name, description e developer_instructions não vazios."
+            )
+        clean_instructions = instructions.strip()
+        if len(name.strip()) > MAX_PROFILE_NAME_CHARS:
+            raise ValueError(f"Nome do perfil {profile_path.name} excede {MAX_PROFILE_NAME_CHARS} caracteres.")
+        if len(description.strip()) > MAX_PROFILE_DESCRIPTION_CHARS:
+            raise ValueError(
+                f"Descrição do perfil {profile_path.name} excede {MAX_PROFILE_DESCRIPTION_CHARS} caracteres."
+            )
+        if len(clean_instructions) > MAX_PROFILE_INSTRUCTIONS_CHARS:
+            raise ValueError(
+                f"Instruções do perfil {profile_path.name} excedem {MAX_PROFILE_INSTRUCTIONS_CHARS} caracteres."
+            )
+        total_instructions_chars += len(clean_instructions)
+        if total_instructions_chars > MAX_PROFILE_TOTAL_INSTRUCTIONS_CHARS:
+            raise ValueError(
+                f"Instruções dos perfis excedem {MAX_PROFILE_TOTAL_INSTRUCTIONS_CHARS} caracteres no total."
+            )
+        profiles[identifier] = AgentProfile(
+            identifier=identifier,
+            name=name.strip(),
+            description=description.strip(),
+            developer_instructions=clean_instructions,
+        )
+    return profiles
+
+
+def select_agent_profile(
+    profiles: dict[str, AgentProfile],
+    requested_profile: str,
+    task: str,
+) -> AgentProfile | None:
+    requested = requested_profile.strip().lower()
+    if not profiles:
+        if requested:
+            raise ValueError(f"Perfil solicitado, mas nenhum TOML foi carregado: {requested}")
+        return None
+    if requested:
+        if requested not in profiles:
+            available = ", ".join(sorted(profiles))
+            raise ValueError(f"Perfil de subagente desconhecido: {requested}. Disponíveis: {available}")
+        return profiles[requested]
+
+    normalized_task = normalize_reference_text(task)
+    routes = (
+        ("longato", ("pipeline", "github actions", "cicd", "ci cd", "deploy")),
+        ("bond", ("iam", "permissao", "acesso", "identidade", "role", "privilegio", "zero trust")),
+        ("baitz", ("readme", "documentacao", "runbook", "manual", "guia", "handoff")),
+        ("anaconda", ("python", "sdk", "api", "csv", "json", "inventario")),
+        ("capitao-kowalski", ("bash", "shell", "gcloud", "aws cli", "azure cli", "hcloud")),
+    )
+    for identifier, keywords in routes:
+        if identifier in profiles and any(keyword in normalized_task for keyword in keywords):
+            return profiles[identifier]
+    if "bulk-worker" in profiles:
+        return profiles["bulk-worker"]
+    return profiles[sorted(profiles)[0]]
+
+
+def format_agent_profile_catalog(profiles: dict[str, AgentProfile]) -> str:
+    if not profiles:
+        return "Nenhuma personalidade TOML foi carregada; use o perfil interno genérico."
+    return "\n".join(
+        f"- {identifier}: {profile.description}" for identifier, profile in sorted(profiles.items())
+    )
 
 
 def normalize_reference_text(value: str) -> str:
@@ -1200,6 +1361,113 @@ def build_client(api_key: str, base_url: str, timeout_seconds: float = DEFAULT_A
 
 def to_json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def message_size_chars(message: Message) -> int:
+    return len(json.dumps(message, ensure_ascii=False, separators=(",", ":"), default=str))
+
+
+def system_state_key(message: Message) -> str | None:
+    if message.get("role") != "system":
+        return None
+    content = str(message.get("content") or "")
+    if content.startswith("Modo de permissão alterado"):
+        return "permission"
+    if content.startswith("Modo de verbosidade alterado"):
+        return "verbosity"
+    if content.startswith("Modo /plan") or content.startswith("Modo padrão de chat"):
+        return "conversation"
+    return None
+
+
+def prepare_messages_for_api(messages: list[Message]) -> tuple[list[Message], int]:
+    """Mantém regras e turno ativo; remove somente turnos antigos completos quando necessário."""
+    total_chars = sum(message_size_chars(message) for message in messages)
+    if total_chars <= MAX_API_MESSAGE_CHARS:
+        return messages, 0
+
+    latest_user_index = next(
+        (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"),
+        len(messages),
+    )
+    anchor_indices: set[int] = set()
+    if messages and messages[0].get("role") == "system":
+        anchor_indices.add(0)
+    latest_state_indices: dict[str, int] = {}
+    for index, message in enumerate(messages[:latest_user_index]):
+        if message.get("role") != "system" or index == 0:
+            continue
+        state_key = system_state_key(message)
+        if state_key is None:
+            anchor_indices.add(index)
+        else:
+            latest_state_indices[state_key] = index
+    anchor_indices.update(latest_state_indices.values())
+    anchors = [messages[index] for index in sorted(anchor_indices)]
+    active_turn = messages[latest_user_index:]
+    mandatory_chars = sum(message_size_chars(message) for message in anchors + active_turn)
+    reserve_for_notice = 300
+    if mandatory_chars + reserve_for_notice > MAX_API_MESSAGE_CHARS:
+        raise PromptTooLargeError(
+            "O pedido atual é grande demais para ser enviado com segurança ao MaaS. "
+            "Coloque o material em arquivos dentro do workspace e peça a leitura por partes, "
+            "ou divida o texto em pedidos menores. Aumentar o timeout não aumenta o contexto do modelo."
+        )
+
+    older_messages = [
+        message
+        for index, message in enumerate(messages[:latest_user_index])
+        if index not in anchor_indices and message.get("role") != "system"
+    ]
+    chunks: list[list[Message]] = []
+    for message in older_messages:
+        if message.get("role") in {"user", "system"} or not chunks:
+            chunks.append([message])
+        else:
+            chunks[-1].append(message)
+
+    selected_reversed: list[list[Message]] = []
+    used_chars = mandatory_chars + reserve_for_notice
+    kept_older_count = 0
+    for chunk in reversed(chunks):
+        chunk_chars = sum(message_size_chars(message) for message in chunk)
+        if used_chars + chunk_chars > MAX_API_MESSAGE_CHARS:
+            break
+        selected_reversed.append(chunk)
+        used_chars += chunk_chars
+        kept_older_count += len(chunk)
+
+    omitted_count = latest_user_index - len(anchors) - kept_older_count
+    compacted: list[Message] = list(anchors)
+    compacted.append(
+        {
+            "role": "system",
+            "content": (
+                f"Proteção de contexto local: {omitted_count} mensagens antigas foram omitidas desta chamada. "
+                "Preserve as regras do sistema, o pedido atual e confirme fatos antigos se forem necessários."
+            ),
+        }
+    )
+    for chunk in reversed(selected_reversed):
+        compacted.extend(chunk)
+    compacted.extend(active_turn)
+    return compacted, omitted_count
+
+
+def close_oversized_turn(messages: list[Message], turn_start: int, exc: PromptTooLargeError) -> None:
+    active_messages = messages[turn_start:]
+    if any(message.get("role") == "tool" for message in active_messages):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": (
+                    "A execução foi interrompida localmente por excesso de contexto após ferramentas já terem "
+                    f"sido executadas. As evidências foram preservadas no histórico. Detalhe: {exc}"
+                ),
+            }
+        )
+        return
+    del messages[turn_start:]
 
 
 def truncate_text(value: str, limit: int = MAX_TOOL_OUTPUT_CHARS) -> str:
@@ -1786,14 +2054,27 @@ def is_unsafe_command(command: str, cli_name: str | None = None) -> bool:
 
 
 def confirm_action(title: str, detail: str, destructive: bool = False) -> bool:
-    print(f"{YELLOW}Aprovação necessária:{RESET} {title}")
-    print(detail)
-    if destructive:
-        answer = input(f"{RED}Digite YES para aprovar ação destrutiva:{RESET} ").strip()
-        return answer == "YES"
+    task_board = getattr(_TASK_BOARD_CONTEXT, "task_board", None)
+    if task_board is not None:
+        task_board.pause_for_approval()
+    try:
+        print(f"{YELLOW}Aprovação necessária:{RESET} {title}")
+        print(detail)
+        try:
+            if destructive:
+                answer = input(f"{RED}Digite YES para aprovar ação destrutiva:{RESET} ").strip()
+                return answer == "YES"
 
-    answer = input(f"{YELLOW}Aprovar? [y/N]:{RESET} ").strip().lower()
-    return answer in {"y", "yes", "s", "sim"}
+            answer = input(f"{YELLOW}Aprovar? [y/N]:{RESET} ").strip().lower()
+            return answer in {"y", "yes", "s", "sim"}
+        except EOFError as exc:
+            raise ApprovalUnavailableError(
+                "A aprovação não pôde ser lida neste terminal. Execute em um console interativo "
+                "ou altere conscientemente o /mode antes de repetir."
+            ) from exc
+    finally:
+        if task_board is not None:
+            task_board.resume_after_approval()
 
 
 def should_confirm_action(permission_mode: str, action: str, unsafe: bool = False) -> bool:
@@ -1824,12 +2105,14 @@ class WorkspaceTools:
         model: str | None = None,
         temperature: float = 0.1,
         allow_write: bool = True,
+        agent_profiles: dict[str, AgentProfile] | None = None,
     ) -> None:
         self.config = config
         self.client = client
         self.model = model
         self.temperature = temperature
         self.allow_write = allow_write
+        self.agent_profiles = agent_profiles or {}
         self.subagents_started = 0
         self._subagent_lock = threading.Lock()
 
@@ -1951,7 +2234,14 @@ class WorkspaceTools:
                 }
             )
 
-        return to_json({"path": str(directory), "entries": entries, "truncated": len(entries) >= max_entries})
+        return to_json(
+            {
+                "path": str(directory),
+                "entries": entries,
+                "truncated": len(directory_entries) > max_entries,
+                "total_entries": len(directory_entries),
+            }
+        )
 
     def read_file(self, path: str, start_line: int = 1, max_lines: int = 200, path_reference: str = "") -> str:
         file_path = self.resolve_read_path(path, path_reference)
@@ -2241,6 +2531,7 @@ class WorkspaceTools:
         scope: str = "",
         max_steps: int | None = None,
         allow_mutation: bool = True,
+        profile: str = "",
     ) -> str:
         if self.client is None or not self.model:
             raise PermissionError("Subagentes indisponíveis: cliente/modelo não foram configurados.")
@@ -2248,7 +2539,10 @@ class WorkspaceTools:
             raise PermissionError("Subagentes desativados por --max-subagents 0.")
 
         task = task.strip()
-        name = name.strip() or "subagente"
+        selected_profile = select_agent_profile(self.agent_profiles, profile, task)
+        name = name.strip() or (selected_profile.name if selected_profile else "subagente")
+        if name == "subagente" and selected_profile is not None:
+            name = selected_profile.name
         scope = scope.strip()
         if not task:
             raise ValueError("A tarefa do subagente não pode ser vazia.")
@@ -2260,6 +2554,7 @@ class WorkspaceTools:
                     "name": name,
                     "scope": scope,
                     "task": task,
+                    "profile": selected_profile.identifier if selected_profile else "generic",
                     "permission_mode": self.config.permission_mode,
                 }
             )
@@ -2290,6 +2585,7 @@ class WorkspaceTools:
             model=self.model,
             temperature=self.temperature,
             allow_write=allow_mutation,
+            agent_profiles=self.agent_profiles,
         )
         sub_tool_schemas = build_tool_schemas(
             allow_shell=sub_config.allow_shell,
@@ -2302,6 +2598,7 @@ class WorkspaceTools:
             task=task,
             scope=scope,
             allow_mutation=allow_mutation,
+            profile=selected_profile,
         )
         answer = run_agent_until_final(
             client=self.client,
@@ -2326,6 +2623,7 @@ class WorkspaceTools:
                 "model": self.model,
                 "steps_limit": bounded_steps,
                 "allow_mutation": allow_mutation,
+                "profile": selected_profile.identifier if selected_profile else "generic",
                 "answer": answer,
             }
         )
@@ -2347,6 +2645,8 @@ class WorkspaceTools:
             if name == "spawn_subagent":
                 return self.spawn_subagent(**arguments)
             raise ValueError(f"Ferramenta desconhecida: {name}")
+        except (ApprovalUnavailableError, KeyboardInterrupt):
+            raise
         except Exception as exc:
             safe_error = redact_sensitive_text(truncate_single_line(str(exc), 1000))
             LOGGER.warning(
@@ -2362,6 +2662,7 @@ def build_tool_schemas(
     allow_write: bool = True,
     allow_subagents: bool = True,
     subagent_max_steps: int = DEFAULT_SUBAGENT_MAX_STEPS,
+    profile_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = [
         {
@@ -2565,6 +2866,15 @@ def build_tool_schemas(
                                     "respeitando o /mode da sessão. Defina false para execução somente leitura."
                                 ),
                             },
+                            "profile": {
+                                "type": "string",
+                                "default": "",
+                                **({"enum": ["", *profile_names]} if profile_names else {}),
+                                "description": (
+                                    "Personalidade TOML do subagente. Se omitida, o runtime escolhe "
+                                    "automaticamente o perfil mais adequado à tarefa."
+                                ),
+                            },
                         },
                     },
                 },
@@ -2584,6 +2894,7 @@ Objetivo:
 - Ser direto, técnico, analítico e seguro.
 - Planejar a execução e consolidar resultados de ferramentas e subagentes.
 - Delegar a subagentes apenas tarefas independentes que se beneficiem de leitura, validação ou revisão isolada.
+- Ao delegar, selecione em `profile` uma personalidade adequada entre as disponíveis. Você continua sendo o orquestrador e deve consolidar os resultados.
 - Usar run_cli para CLIs diretas como aws, az, gcloud, hcloud, kubectl, terraform, git, gh, docker, helm, python, npm e similares.
 - Usar run_powershell apenas quando precisar de recursos específicos do PowerShell.
 
@@ -2619,6 +2930,15 @@ Estilo:
 - Faça o correto pelo correto, seguindo boas práticas mesmo quando isso exigir contrariar a abordagem sugerida pelo operador.
 - Priorize evidência, impacto, risco, validação e próximos passos concretos.
 - Ao concluir uma tarefa, resuma arquivos alterados, validação e riscos residuais."""
+
+
+def append_profile_catalog(system_prompt: str, profiles: dict[str, AgentProfile]) -> str:
+    return (
+        f"{system_prompt}\n\nPersonalidades de subagentes disponíveis:\n"
+        f"{format_agent_profile_catalog(profiles)}\n\n"
+        "As personalidades refinam especialização e estilo, mas nunca alteram modelo, endpoint, ferramentas, "
+        "permissões ou os limites de segurança da sessão."
+    )
 
 
 def read_context_file(path: Path) -> str:
@@ -2707,8 +3027,12 @@ def read_project_context(config: AgentConfig) -> str:
     return context
 
 
-def create_initial_messages(config: AgentConfig) -> list[Message]:
-    system_prompt = create_system_prompt(config)
+def create_initial_messages(
+    config: AgentConfig,
+    agent_profiles: dict[str, AgentProfile] | None = None,
+) -> list[Message]:
+    profiles = agent_profiles or {}
+    system_prompt = append_profile_catalog(create_system_prompt(config), profiles)
     project_context = read_project_context(config)
     if project_context:
         system_prompt = (
@@ -2726,14 +3050,24 @@ def create_subagent_messages(
     task: str,
     scope: str,
     allow_mutation: bool,
+    profile: AgentProfile | None = None,
 ) -> list[Message]:
+    profile_name = profile.name if profile else "Perfil genérico"
+    profile_instructions = profile.developer_instructions if profile else "Execute a tarefa com objetividade e segurança."
     system_prompt = f"""Você é {name}, um subagente especializado chamado pelo AgenteGlobal.
+
+Personalidade ativa: {profile_name}
+Instruções da personalidade:
+<profile_instructions>
+{profile_instructions}
+</profile_instructions>
 
 Objetivo:
 - Execute somente a tarefa delegada.
 - Use ferramentas quando precisar de evidência local.
 - Retorne achados, evidências de arquivos/linhas quando existirem, validação feita, premissas e riscos residuais.
 - Não chame outros subagentes.
+- A IA principal continua sendo a orquestradora. Entregue seu resultado a ela e não tente assumir a conversa principal.
 
 Limites obrigatórios:
 - Workspace base para caminhos relativos, escrita e execução local: {config.workspace}
@@ -2915,7 +3249,7 @@ def describe_tool_activity(tool_name: str, arguments: dict[str, Any], step: int,
     if tool_name == "list_dir":
         path = format_path_request(str(arguments.get("path", ".")), str(arguments.get("path_reference", "") or ""))
         max_entries = arguments.get("max_entries", 100)
-        return prefix + f"listando `{path}` com limite de {max_entries} entradas."
+        return prefix + f"listando até {max_entries} itens em `{path}` (limite de segurança; não é erro)."
     if tool_name == "search_text":
         pattern = truncate_single_line(str(arguments.get("pattern", "")), limit=120)
         path = format_path_request(str(arguments.get("path", ".")), str(arguments.get("path_reference", "") or ""))
@@ -2924,9 +3258,10 @@ def describe_tool_activity(tool_name: str, arguments: dict[str, Any], step: int,
         return prefix + f"buscando padrão `{pattern}` em `{path}` (até {max_matches} achados, {max_scanned_files} arquivos)."
     if tool_name == "spawn_subagent":
         name = str(arguments.get("name", "subagente"))
+        profile = str(arguments.get("profile", "") or "automático")
         task = truncate_single_line(str(arguments.get("task", "")), limit=180)
         allow_mutation = bool(arguments.get("allow_mutation", True))
-        return prefix + f"acionando subagente `{name}` (mutação={allow_mutation}) para `{task}`."
+        return prefix + f"acionando subagente `{name}` (perfil={profile}, mutação={allow_mutation}) para `{task}`."
     return prefix + "executando ferramenta solicitada pelo modelo."
 
 
@@ -2957,7 +3292,8 @@ def summarize_tool_result(tool_name: str, result: str) -> tuple[str, str]:
 
     if tool_name == "list_dir" and isinstance(parsed, dict):
         entries = parsed.get("entries") if isinstance(parsed.get("entries"), list) else []
-        return "green", f"list_dir: {len(entries)} entradas listadas em `{parsed.get('path')}`."
+        suffix = "; há mais itens" if parsed.get("truncated") else ""
+        return "green", f"list_dir: {len(entries)} de {parsed.get('total_entries', len(entries))} itens em `{parsed.get('path')}`{suffix}."
 
     if tool_name == "search_text" and isinstance(parsed, dict):
         matches = parsed.get("matches") if isinstance(parsed.get("matches"), list) else []
@@ -3434,6 +3770,26 @@ def run_goal_loop(
     print(f"{YELLOW}Goal>{RESET} limite de {max_iterations} iterações atingido.")
 
 
+def execute_tool_with_task_board(
+    tools_runner: WorkspaceTools,
+    tool_name: str,
+    arguments: dict[str, Any],
+    task_board: TerminalTaskBoard,
+) -> str:
+    previous = getattr(_TASK_BOARD_CONTEXT, "task_board", None)
+    _TASK_BOARD_CONTEXT.task_board = task_board
+    try:
+        return tools_runner.execute(tool_name, arguments)
+    finally:
+        if previous is None:
+            try:
+                delattr(_TASK_BOARD_CONTEXT, "task_board")
+            except AttributeError:
+                pass
+        else:
+            _TASK_BOARD_CONTEXT.task_board = previous
+
+
 def run_agent_until_final(
     client: OpenAI,
     model: str,
@@ -3447,8 +3803,18 @@ def run_agent_until_final(
 ) -> str:
     step_budget = min(INITIAL_STEP_BUDGET, max_steps)
     task_board = TerminalTaskBoard(max_slots=step_budget, enabled=emit_tools)
+    compaction_reported = False
     for step in range(1, max_steps + 1):
         try:
+            request_messages, omitted_messages = prepare_messages_for_api(messages)
+            if omitted_messages and emit_tools and not compaction_reported:
+                print_labeled(
+                    "Contexto>",
+                    f"{omitted_messages} mensagens antigas foram omitidas desta chamada para evitar excesso de contexto.",
+                    style="yellow",
+                    content_style="yellow",
+                )
+                compaction_reported = True
             response = create_chat_completion_with_retry(
                 client,
                 operation="agent_turn",
@@ -3456,12 +3822,12 @@ def run_agent_until_final(
                 emit_status=emit_tools,
                 loading_enabled=emit_tools and not task_board.tasks,
                 model=model,
-                messages=messages,
+                messages=request_messages,
                 tools=tool_schemas,
                 tool_choice="auto",
                 temperature=temperature,
             )
-        except (OpenAIError, KeyboardInterrupt):
+        except (OpenAIError, KeyboardInterrupt, PromptTooLargeError):
             task_board.finish(failed=True)
             raise
 
@@ -3522,30 +3888,34 @@ def run_agent_until_final(
             for _, tool_name, arguments, parse_error_result in prepared_tool_calls
         )
 
-        if run_subagents_in_parallel:
-            max_workers = max(1, min(len(prepared_tool_calls), tools_runner.config.max_subagents))
-            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="agenteglobal-subagent") as executor:
-                future_indexes = {
-                    executor.submit(tools_runner.execute, tool_name, arguments): index
-                    for index, (_, tool_name, arguments, _) in enumerate(prepared_tool_calls)
-                }
-                for future in as_completed(future_indexes):
-                    index = future_indexes[future]
-                    result = future.result()
+        try:
+            if run_subagents_in_parallel:
+                max_workers = max(1, min(len(prepared_tool_calls), tools_runner.config.max_subagents))
+                with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="agenteglobal-subagent") as executor:
+                    future_indexes = {
+                        executor.submit(tools_runner.execute, tool_name, arguments): index
+                        for index, (_, tool_name, arguments, _) in enumerate(prepared_tool_calls)
+                    }
+                    for future in as_completed(future_indexes):
+                        index = future_indexes[future]
+                        result = future.result()
+                        results[index] = result
+                        if emit_tools:
+                            task_board.complete_task(batch[index], "spawn_subagent", result)
+            else:
+                for index, (task, (_, tool_name, arguments, parse_error_result)) in enumerate(
+                    zip(batch, prepared_tool_calls)
+                ):
+                    if parse_error_result is not None:
+                        result = parse_error_result
+                    else:
+                        result = execute_tool_with_task_board(tools_runner, tool_name, arguments, task_board)
                     results[index] = result
                     if emit_tools:
-                        task_board.complete_task(batch[index], "spawn_subagent", result)
-        else:
-            for index, (task, (_, tool_name, arguments, parse_error_result)) in enumerate(
-                zip(batch, prepared_tool_calls)
-            ):
-                if parse_error_result is not None:
-                    result = parse_error_result
-                else:
-                    result = tools_runner.execute(tool_name, arguments)
-                results[index] = result
-                if emit_tools:
-                    task_board.complete_task(task, tool_name, result)
+                        task_board.complete_task(task, tool_name, result)
+        except (ApprovalUnavailableError, KeyboardInterrupt):
+            task_board.finish(failed=True)
+            raise
 
         for result, (tool_call, tool_name, _, _) in zip(results, prepared_tool_calls):
             messages.append(
@@ -3655,13 +4025,22 @@ def agent_loop(
     model_resolution: str,
     config: AgentConfig,
     temperature: float,
+    agent_profiles: dict[str, AgentProfile],
 ) -> None:
-    tools_runner = WorkspaceTools(config, client=client, model=model, temperature=temperature)
+    profile_names = sorted(agent_profiles)
+    tools_runner = WorkspaceTools(
+        config,
+        client=client,
+        model=model,
+        temperature=temperature,
+        agent_profiles=agent_profiles,
+    )
     tool_schemas = build_tool_schemas(
         allow_shell=config.allow_shell,
         allow_write=True,
         allow_subagents=config.max_subagents > 0,
         subagent_max_steps=config.subagent_max_steps,
+        profile_names=profile_names,
     )
     plan_tool_schemas = build_tool_schemas(
         allow_shell=False,
@@ -3669,7 +4048,7 @@ def agent_loop(
         allow_subagents=False,
         subagent_max_steps=config.subagent_max_steps,
     )
-    messages: list[Message] = create_initial_messages(config)
+    messages: list[Message] = create_initial_messages(config, agent_profiles)
     conversation_mode = "chat"
     prompt_session = build_prompt_session()
     last_saved_digest: str | None = None
@@ -3681,6 +4060,12 @@ def agent_loop(
     print_labeled(
         "API:",
         f"timeout={config.api_timeout_seconds:g}s, retries={config.api_retries}",
+        style="gray",
+        content_style="gray",
+    )
+    print_labeled(
+        "Perfis:",
+        ", ".join(profile_names) if profile_names else "perfil interno genérico",
         style="gray",
         content_style="gray",
     )
@@ -3709,6 +4094,15 @@ def agent_loop(
             return
 
         if not user_input:
+            continue
+        if len(user_input) > MAX_USER_INPUT_CHARS:
+            print_labeled(
+                "Entrada>",
+                f"o texto excede {MAX_USER_INPUT_CHARS} caracteres. "
+                "Salve o material em arquivos no workspace e peça a leitura por partes, ou divida o pedido.",
+                style="red",
+                content_style="red",
+            )
             continue
 
         command = user_input.lower()
@@ -3808,6 +4202,9 @@ def agent_loop(
                 api_available = False
                 append_api_failure_context(messages, turn_start, exc)
                 report_api_error(exc)
+            except PromptTooLargeError as exc:
+                close_oversized_turn(messages, turn_start, exc)
+                print_labeled("Contexto>", str(exc), style="red", content_style="red")
             except KeyboardInterrupt:
                 print()
                 last_saved_digest = persist_history_on_exit(
@@ -3827,22 +4224,36 @@ def agent_loop(
             parts = user_input.split(maxsplit=1)
             spawn_body = parts[1].strip() if len(parts) > 1 else ""
             allow_mutation = True
+            requested_profile = ""
             read_only_flags = ("--read-only", "--readonly", "--read")
-            matched_read_only = next(
-                (
-                    flag
-                    for flag in read_only_flags
-                    if spawn_body.lower() == flag or spawn_body.lower().startswith(f"{flag} ")
-                ),
-                None,
-            )
-            if matched_read_only:
-                allow_mutation = False
-                spawn_body = spawn_body[len(matched_read_only) :].strip()
-            elif spawn_body.lower() == "--write" or spawn_body.lower().startswith("--write "):
-                spawn_body = spawn_body[len("--write") :].strip()
+            while spawn_body.startswith("--"):
+                matched_read_only = next(
+                    (
+                        flag
+                        for flag in read_only_flags
+                        if spawn_body.lower() == flag or spawn_body.lower().startswith(f"{flag} ")
+                    ),
+                    None,
+                )
+                if matched_read_only:
+                    allow_mutation = False
+                    spawn_body = spawn_body[len(matched_read_only) :].strip()
+                    continue
+                if spawn_body.lower() == "--write" or spawn_body.lower().startswith("--write "):
+                    allow_mutation = True
+                    spawn_body = spawn_body[len("--write") :].strip()
+                    continue
+                profile_match = re.match(
+                    r"(?is)^--profile(?:=|\s+)([a-z0-9]+(?:-[a-z0-9]+)*)(?:\s+|$)(.*)$",
+                    spawn_body,
+                )
+                if profile_match:
+                    requested_profile = profile_match.group(1).lower()
+                    spawn_body = profile_match.group(2).strip()
+                    continue
+                break
             if not spawn_body:
-                print(f"{YELLOW}Uso: /spawn [--read-only] <tarefa objetiva>{RESET}")
+                print(f"{YELLOW}Uso: /spawn [--profile nome] [--read-only] <tarefa objetiva>{RESET}")
                 continue
             if conversation_mode == "plan" and allow_mutation:
                 print(
@@ -3852,15 +4263,26 @@ def agent_loop(
                 continue
 
             tools_runner.subagents_started = 0
-            result = tools_runner.execute(
-                "spawn_subagent",
-                {
-                    "task": spawn_body,
-                    "name": "manual",
-                    "scope": "Invocação explícita pelo operador.",
-                    "allow_mutation": allow_mutation,
-                },
-            )
+            try:
+                result = tools_runner.execute(
+                    "spawn_subagent",
+                    {
+                        "task": spawn_body,
+                        "name": "manual",
+                        "scope": "Invocação explícita pelo operador.",
+                        "allow_mutation": allow_mutation,
+                        "profile": requested_profile,
+                    },
+                )
+            except ApprovalUnavailableError as exc:
+                print_labeled("Subagente>", str(exc), style="red", content_style="red")
+                continue
+            except KeyboardInterrupt:
+                print()
+                last_saved_digest = persist_history_on_exit(
+                    client, model, messages, config, last_saved_digest, "keyboard_interrupt", False
+                )
+                return
             try:
                 parsed_result = json.loads(result)
             except json.JSONDecodeError:
@@ -3932,6 +4354,12 @@ def agent_loop(
                     client, model, messages, config, last_saved_digest, "keyboard_interrupt", False
                 )
                 return
+            except ApprovalUnavailableError as exc:
+                del messages[turn_start:]
+                print_labeled("Goal>", str(exc), style="red", content_style="red")
+            except PromptTooLargeError as exc:
+                close_oversized_turn(messages, turn_start, exc)
+                print_labeled("Contexto>", str(exc), style="red", content_style="red")
             else:
                 api_available = True
             continue
@@ -3978,7 +4406,7 @@ def agent_loop(
                 )
             continue
         if command in {"/clear", "/limpar"}:
-            messages = create_initial_messages(config)
+            messages = create_initial_messages(config, agent_profiles)
             last_saved_digest = None
             print(f"{YELLOW}Histórico limpo.{RESET}")
             continue
@@ -4013,6 +4441,12 @@ def agent_loop(
                 client, model, messages, config, last_saved_digest, "keyboard_interrupt", False
             )
             return
+        except ApprovalUnavailableError as exc:
+            del messages[turn_start:]
+            print_labeled("Aprovação>", str(exc), style="red", content_style="red")
+        except PromptTooLargeError as exc:
+            close_oversized_turn(messages, turn_start, exc)
+            print_labeled("Contexto>", str(exc), style="red", content_style="red")
         else:
             api_available = True
 
@@ -4023,11 +4457,13 @@ def build_config(args: argparse.Namespace) -> AgentConfig:
     model_alias_file = resolve_workspace_path(workspace, args.model_alias_file)
     agents_file = resolve_workspace_path(workspace, args.agents_file)
     skills_dir = resolve_workspace_path(workspace, args.skills_dir)
+    profiles_dir = resolve_workspace_path(workspace, args.profiles_dir)
     if not workspace.exists():
         raise FileNotFoundError(f"Workspace não encontrado: {workspace}")
     if not workspace.is_dir():
         raise NotADirectoryError(f"Workspace não é diretório: {workspace}")
     ensure_path_inside_workspace(workspace, model_alias_file)
+    ensure_path_inside_workspace(workspace, profiles_dir)
     if args.api_timeout < 5 or args.api_timeout > 300:
         raise ValueError("--api-timeout precisa estar entre 5 e 300 segundos.")
     if args.api_retries < 0 or args.api_retries > MAX_API_RETRIES:
@@ -4049,6 +4485,7 @@ def build_config(args: argparse.Namespace) -> AgentConfig:
         model_alias_file=model_alias_file,
         agents_file=agents_file,
         skills_dir=skills_dir,
+        profiles_dir=profiles_dir,
         read_scope=args.read_scope,
         write_scope=args.write_scope,
         load_project_context=not args.no_project_context,
@@ -4072,13 +4509,14 @@ def main() -> int:
     try:
         config = build_config(args)
         configure_diagnostic_logging(config.workspace)
+        agent_profiles = load_agent_profiles(config)
         model, model_resolution = resolve_model_name(
             direct_model=args.model,
             alias_name=args.model_alias,
             alias_file=config.model_alias_file,
         )
         api_key = read_api_key(config.api_key_file)
-    except (FileNotFoundError, NotADirectoryError, PermissionError, ValueError) as exc:
+    except (OSError, PermissionError, ValueError) as exc:
         print(f"{RED}Erro de configuração: {exc}{RESET}", file=sys.stderr)
         return 2
 
@@ -4089,6 +4527,7 @@ def main() -> int:
         model_resolution=model_resolution,
         config=config,
         temperature=args.temperature,
+        agent_profiles=agent_profiles,
     )
     return 0
 

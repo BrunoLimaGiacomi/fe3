@@ -1,2 +1,2 @@
 @echo off
-py -3 "%~dp0..\AgenteGRC\AgenteGRC.py" %*
+py -3 "%~dp0..\AgenteGRC.py" %*

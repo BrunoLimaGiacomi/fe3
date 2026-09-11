@@ -38,11 +38,11 @@ DEFAULT_GOAL_MAX_ITERATIONS: int = 5
 
 # Timeout padrão, em segundos, de comandos locais executados pelas ferramentas.
 # Aumentar ajuda comandos lentos; reduzir interrompe processos mais cedo.
-DEFAULT_TIMEOUT_SECONDS: int = 30
+DEFAULT_TIMEOUT_SECONDS: int = 60
 
 # Timeout padrão, em segundos, de cada chamada ao endpoint MaaS.
 # Aumentar tolera respostas lentas; reduzir detecta travamentos mais cedo.
-DEFAULT_API_TIMEOUT_SECONDS: float = 45.0
+DEFAULT_API_TIMEOUT_SECONDS: float = 180.0
 
 # Número de novas tentativas após uma falha transitória da API.
 # Aumentar melhora tolerância a instabilidade, mas prolonga uma falha real.

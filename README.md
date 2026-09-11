@@ -1,6 +1,8 @@
 # Agentes De IA Locais
 Esse README explica o necessário para instalar, configurar, executar e diagnosticar qualquer distribuição de agente de IA deste repositório, incluindo especializações de GRC, segurança, desenvolvimento ou outras que sejam adicionadas futuramente.
 
+Para a equipe de Auditoria, Riscos e Compliance, use o guia exclusivo e sem jargão em [`AgenteGRC/README.md`](AgenteGRC/README.md).
+
 ## Como Obter E Atualizar
 
 **Por padrão, baixe somente um agente.** Não é necessário manter todas as distribuições no computador.
@@ -18,8 +20,8 @@ Use sparse checkout para deixar no diretório de trabalho somente o README, o `.
 Para o agente de arquitetura:
 
 ```powershell
-git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git agente-global
-Set-Location .\agente-global
+git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git AgenteGlobal
+Set-Location .\AgenteGlobal
 git sparse-checkout set --cone AgenteGlobal
 git remote -v
 ```
@@ -27,23 +29,25 @@ git remote -v
 Para GRC:
 
 ```powershell
-git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git agente-grc
-Set-Location .\agente-grc
+git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git AgenteGRC
+Set-Location .\AgenteGRC
 git sparse-checkout set --cone AgenteGRC
 git remote -v
 ```
 
 O repositório continua conectado ao `origin/main`, mas somente a pasta selecionada aparece no diretório de trabalho. A pasta `.git` mantém a conexão e o histórico; ela não deve ser removida. Para trocar o agente sem clonar novamente, use `git sparse-checkout set --cone AgenteGlobal` ou `git sparse-checkout set --cone AgenteGRC`.
 
+O destino do clone e a distribuição usam o mesmo nome de propósito. O resultado do primeiro bloco é `AgenteGlobal\AgenteGlobal`; dentro da segunda pasta ficam `AgenteGlobal.py`, o core, o painel, as skills e as personalidades. Não existe mais um terceiro diretório `AgenteGlobal`. Para GRC, o resultado equivalente é `AgenteGRC\AgenteGRC`.
+
 Para atualizar uma cópia já clonada:
 
 ```powershell
-Set-Location .\agente-global
+Set-Location .\AgenteGlobal
 git status --short
 git pull --ff-only origin main
 ```
 
-Para GRC, use `Set-Location .\agente-grc` no lugar da primeira linha.
+Para GRC, use `Set-Location .\AgenteGRC` no lugar da primeira linha.
 
 Execute o `git pull` na mesma pasta clonada. Não apague a pasta e faça novo download para atualizar. Se houver alterações locais, preserve-as e resolva a situação antes do pull; não use `reset --hard` para forçar a atualização.
 
@@ -53,27 +57,19 @@ Execute cada agente a partir da própria pasta de distribuição. Isso garante q
 
 ```powershell
 Push-Location .\AgenteGlobal
-py -3 .\AgenteGlobal\AgenteGlobal.py --help
-py -3 .\AgenteGlobal\AgenteGlobal.py
+py -3 .\AgenteGlobal.py --help
+py -3 .\AgenteGlobal.py
 Pop-Location
 ```
 
 ```powershell
 Push-Location .\AgenteGRC
-py -3 .\AgenteGRC\AgenteGRC.py --help
-py -3 .\AgenteGRC\AgenteGRC.py
+py -3 .\AgenteGRC.py --help
+py -3 .\AgenteGRC.py
 Pop-Location
 ```
 
 Também é possível usar os wrappers `.cmd` dentro de cada pasta de distribuição, por exemplo `.\bin\agenteglobal.cmd` ou `.\bin\agentegrc.cmd`. Para uma nova distribuição, siga o mesmo padrão: entre na pasta dela e execute o arquivo de entrada indicado por `--help`.
-
-Os exemplos acima usam o Python registrado no Windows (`py -3`). Se você criou o `.venv`, execute os mesmos comandos com `..\.venv\Scripts\python.exe` depois de entrar na pasta da distribuição:
-
-```powershell
-Push-Location .\AgenteGlobal
-..\.venv\Scripts\python.exe .\AgenteGlobal\AgenteGlobal.py --help
-Pop-Location
-```
 
 ## 1. O que é
 
@@ -141,8 +137,8 @@ Cada distribuição possui uma pasta e um arquivo de entrada. Para as distribui�
 
 ```powershell
 Push-Location .\AgenteGlobal
-py -3 .\AgenteGlobal\AgenteGlobal.py --help
-py -3 .\AgenteGlobal\AgenteGlobal.py --workspace (Get-Location).Path
+py -3 .\AgenteGlobal.py --help
+py -3 .\AgenteGlobal.py --workspace (Get-Location).Path
 Pop-Location
 ```
 
@@ -174,7 +170,6 @@ py -3 .\Painel.py
 Pop-Location
 ```
 
-Se estiver usando `.venv`, troque `py -3` por `..\.venv\Scripts\python.exe` nesse bloco.
 Para GRC, use `Push-Location .\AgenteGRC` no lugar da primeira linha.
 
 Os limites de segurança e de validação do core continuam valendo mesmo quando um valor do painel é alterado.
@@ -191,7 +186,7 @@ Restrinja os escopos quando possível:
 
 ```powershell
 Push-Location .\AgenteGlobal
-py -3 .\AgenteGlobal\AgenteGlobal.py --read-scope workspace --write-scope workspace --no-shell
+py -3 .\AgenteGlobal.py --read-scope workspace --write-scope workspace --no-shell
 Pop-Location
 ```
 
@@ -211,6 +206,7 @@ Os comandos variam conforme a distribuição. Quando disponíveis:
 /goal <objetivo>              executa ciclos com validação
 /spawn <tarefa>               invoca subagente com escrita por padrão
 /spawn --read-only <tarefa>   invoca subagente sem escrita, CLI ou PowerShell
+/spawn --profile baitz --read-only <tarefa>
 /save                         salva o resumo da sessão
 /clear                        limpa a memória atual
 /exit                         salva a sessão e encerra
@@ -218,7 +214,7 @@ Os comandos variam conforme a distribuição. Quando disponíveis:
 
 `direto` responde somente o essencial. `normal` é o padrão recomendado. `detalhado` acrescenta contexto, evidências e etapas, sem dispensar objetividade.
 
-Quando `/spawn` existir, ele usa escrita por padrão e respeita o modo de permissão. Use `--read-only` para impedir escrita, execução de CLI e PowerShell. Subagentes não devem criar novos subagentes. Delegações somente leitura podem executar em paralelo; ações mutáveis devem ser tratadas com mais cautela e respeitar as aprovações.
+Quando `/spawn` existir, ele usa escrita por padrão e respeita o modo de permissão. Use `--read-only` para impedir escrita, execução de CLI e PowerShell. A IA principal escolhe automaticamente uma personalidade TOML de `agents/`, ou o operador pode usar `--profile`. Os perfis atuais são `anaconda`, `baitz`, `bond`, `bulk-worker`, `capitao-kowalski` e `longato`. Eles refinam a especialização, mas não alteram o GLM, endpoint, permissões ou ferramentas. Subagentes não devem criar novos subagentes. Delegações somente leitura podem executar em paralelo; ações mutáveis devem ser tratadas com mais cautela e respeitar as aprovações.
 
 ## 8. Histórico e contexto futuro
 
@@ -228,7 +224,7 @@ Na sessão seguinte, os históricos recentes são carregados conforme `--history
 
 ```powershell
 Push-Location .\AgenteGlobal
-py -3 .\AgenteGlobal\AgenteGlobal.py --history-limit 6
+py -3 .\AgenteGlobal.py --history-limit 6
 Pop-Location
 ```
 
@@ -281,7 +277,13 @@ O segundo comando deve terminar sem traceback.
 
 ### `Connection error` ou timeout
 
-Verifique `HUAWEI_MAAS_BASE_URL`, DNS, proxy, firewall, VPN, disponibilidade do serviço e o log em `workspace\logs\`. Aumente `--api-timeout` somente para redes lentas. Retries não corrigem endpoint incorreto, indisponibilidade permanente ou credencial inválida.
+Verifique `HUAWEI_MAAS_BASE_URL`, DNS, proxy, firewall, VPN, disponibilidade do serviço e o log em `workspace\logs\`. O padrão da API é 180 segundos; use até `--api-timeout 300` se o MaaS estiver respondendo lentamente. `DEFAULT_TIMEOUT_SECONDS` controla somente comandos locais e não corrige demora da resposta do modelo. Retries não corrigem endpoint incorreto, indisponibilidade permanente ou credencial inválida.
+
+O runtime limita uma entrada colada a 80.000 caracteres e, quando a conversa cresce demais, omite da chamada somente turnos antigos completos, mantendo as regras e o pedido atual. Isso evita enviar contexto ilimitado, mas não substitui dividir documentos grandes: coloque-os no workspace e peça a leitura por partes. Aumentar o timeout não aumenta o contexto suportado pelo modelo.
+
+### `listando até 100 itens`
+
+Essa mensagem não é erro, quota de mensagens nem limite de tokens. `list_dir` lista até 100 arquivos e pastas por chamada para evitar uma varredura excessiva. O modelo pode consultar uma subpasta ou aumentar `max_entries` até 500 quando necessário.
 
 ### HTTP 401 ou credencial rejeitada
 
@@ -319,7 +321,7 @@ chcp 65001
 
 ### A IA propõe uma ação inesperada ou fica presa
 
-Ela pode ficar apenas 45 segundos sem uma atualização, passado esse tempo, você pode voltar a interagir com ela. Caso ela tenha travado, pergunte a ela o que ocorreu ou apenas diga para ela continuar
+Se o modo `strict` mostrar `Aprovar? [y/N]:`, o agente está aguardando uma resposta e não deve repetir o painel a cada segundo. Digite `y` para aprovar ou pressione Enter para negar. `Ctrl+C` interrompe a execução. Se não houver uma pergunta de aprovação e o tempo da API tiver sido ultrapassado, consulte o log antes de repetir.
 
 ## 13. Limitações
 
