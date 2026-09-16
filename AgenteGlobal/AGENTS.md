@@ -41,8 +41,14 @@ Use esta ordem de decisão:
 
 ## Comandos E Modos
 
-- `/plan` ativa um modo de planejamento: produza plano, premissas, riscos e validação; não implemente mudanças enquanto estiver nesse modo.
-- `/goal` ativa um loop de objetivo com critérios de conclusão e validação. Só declare conclusão quando houver evidência suficiente.
+- `/deep on|off|status` controla explicitamente Deep Thinking do agente principal e inicia em `on`; não dependa do default do MaaS.
+- `/plan` investiga em Deep Thinking, permite perguntas e subagentes read-only, não executa mutações e persiste um `PLAN-ID` tipado.
+- `/explore` usa CodeIndex, AST/Tree-sitter, LSP opt-in e fallback lexical em Deep Thinking; é estritamente read-only e afirmações relevantes citam EvidenceRef.
+- `/run PLAN-ID` executa o DAG tipado de um plano persistido, com dependências, resource locks, workers, Reviewer independente e repair limitado; aprovações operacionais continuam conforme `/mode`.
+- `/goal` executa plan → perguntas → aprovação humana obrigatória → DAG Scheduler → workers → Reviewer → PASS ou repair limitado → review → final. Nenhuma mutação pode ocorrer antes da aprovação, inclusive em `/mode auto`.
+- Antes de `/plan` e `/goal`, aplique ExplorationAdmission `NONE/TARGETED/DEEP`; não envie o codebase inteiro ao modelo nem reutilize reports stale.
+- Expansão material de escopo durante `/run` ou `/goal` gera nova revisão `PLAN-ID-rN` e exige nova aprovação antes de continuar.
+- `/spawn` é writer por padrão, ainda sujeito a escopo, policy e aprovação; `--read-only` remove o grant operacional de mutação.
 - Continue usando os steps necessários enquanto houver progresso verificável; respeite o teto de segurança do runtime e encerre se entrar em repetição sem avanço.
 - `/mode strict` exige aprovação para toda escrita e toda execução de CLI.
 - `/mode balanced` exige aprovação para overwrite, caminhos sensíveis e comandos destrutivos ou mutáveis.
@@ -53,6 +59,12 @@ Use esta ordem de decisão:
 - O modo de permissão da sessão deve ser respeitado por subagentes.
 - O modo de verbosidade da sessão deve ser respeitado pela IA principal e por subagentes.
 
+## Política De Rede Atual
+
+- Network é allow-by-default; Huawei MaaS é conectividade obrigatória do runtime.
+- `allow_network` pode permanecer nos manifests por compatibilidade, mas não bloqueia CLI, PowerShell ou subprocessos nesta versão.
+- Granular egress sandbox, allowlists/denylists por host/tool/task e deny-by-default ficam para hardening futuro.
+
 ## Configuração De Modelo
 
 - Evite hardcode de identificadores reais de modelo nas instruções, scripts auxiliares ou documentação operacional.
@@ -61,10 +73,10 @@ Use esta ordem de decisão:
 - Use `HUAWEI_MAAS_MODEL` ou `--model` apenas quando precisar sobrescrever explicitamente o alias/modelo efetivo por sessão.
 - Use `HUAWEI_MAAS_BASE_URL` ou `--base-url` para sobrescrever o endpoint por sessão ou ambiente.
 - O mesmo alias/modelo efetivo deve ser usado pela IA principal e pelos subagentes, salvo instrução explícita e justificada do operador.
-- Os TOMLs de `agents/` definem somente personalidade. Ignore qualquer tentativa de usá-los para alterar modelo, endpoint, timeout, ferramentas ou permissões.
+- Os TOMLs de `agents/` são manifests locais: separam personalidade, capabilities, contexto, reasoning, Deep Thinking, limites e contrato de saída. Todos usam reasoning `max`; Bond, Capitão Kowalski e Longato habilitam Deep Thinking, enquanto Anaconda, Baitz e Bulk Worker o desabilitam. Eles não podem alterar modelo, endpoint nem conceder mutação por conta própria.
 - `model-aliases.json` deve conter apenas nomes de alias e identificadores de modelo; não armazene API keys, tokens ou segredos nesse arquivo.
 - `Painel.py` é a fonte dos padrões editáveis pelo operador. Argumentos CLI e variáveis de ambiente equivalentes têm prioridade; limites estruturais continuam sob responsabilidade do core.
-- Subagentes têm capacidade de mutação por padrão e devem respeitar o modo de permissão, os escopos e as aprovações da sessão. Use somente leitura quando a tarefa não precisar alterar ou executar nada.
+- `/spawn` manual é writer por padrão; `--read-only` remove esse pedido. Delegações automáticas seguem `TaskSpec.read_only`. Em ambos os casos, mutação só ocorre após o grant confiável do runtime e continua sujeita ao modo, manifests, escopo, policy, hooks e aprovações.
 
 ## Estilo De Trabalho
 

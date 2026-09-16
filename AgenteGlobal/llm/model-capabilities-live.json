@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "provider": "huawei_modelarts_maas",
+  "model": "glm-5.2",
+  "base_url": "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
+  "tested_at": "2026-09-12T06:35:09.012078Z",
+  "sdk_versions": {
+    "openai": "3.13.0",
+    "openai-agents": "0.22.2",
+    "pydantic": "2.13.5"
+  },
+  "simple_chat": {
+    "status": "supported",
+    "detail": "Chat Completions respondeu com conteúdo não vazio.",
+    "latency_ms": 6155
+  },
+  "streaming": {
+    "status": "supported",
+    "detail": "Stream concluído com 4 chunks e conteúdo agregado.",
+    "latency_ms": 6139
+  },
+  "tools": {
+    "status": "supported",
+    "detail": "Tool call nomeada retornou argumentos JSON válidos.",
+    "latency_ms": 7219
+  },
+  "parallel_tools": {
+    "status": "supported",
+    "detail": "Duas tool calls independentes retornaram na mesma resposta.",
+    "latency_ms": 6870
+  },
+  "reasoning_none": {
+    "status": "supported",
+    "detail": "reasoning_effort=none e thinking=disabled foram aceitos.",
+    "latency_ms": 5198
+  },
+  "reasoning_max": {
+    "status": "supported",
+    "detail": "reasoning_effort=max e thinking=enabled foram aceitos.",
+    "latency_ms": 9250
+  },
+  "json_object": {
+    "status": "supported",
+    "detail": "response_format=json_object retornou objeto JSON válido.",
+    "latency_ms": 5503
+  },
+  "json_schema": {
+    "status": "degraded",
+    "detail": "O endpoint aceitou json_schema, mas devolveu conteúdo fora do schema estrito: JSON cercado por Markdown.",
+    "latency_ms": 4827
+  },
+  "structured_fallback": {
+    "status": "supported",
+    "detail": "Function call nomeada produziu payload validado por Pydantic.",
+    "latency_ms": 7491
+  },
+  "agents_sdk": {
+    "status": "supported",
+    "detail": "Agent e Runner executaram usando OpenAIChatCompletionsModel customizado.",
+    "latency_ms": 7032
+  },
+  "agent_as_tool": {
+    "status": "supported",
+    "detail": "Manager executou especialista local por Agent.as_tool().",
+    "latency_ms": 17221
+  },
+  "agents_sdk_structured_output": {
+    "status": "degraded",
+    "detail": "Agent(output_type=Pydantic) falhou porque o MaaS não retornou JSON estrito.",
+    "latency_ms": 5600
+  },
+  "no_openai_network": {
+    "status": "supported",
+    "detail": "O transporte allowlist observou somente o host MaaS configurado; tracing global e por run permaneceram desativados.",
+    "latency_ms": null
+  },
+  "observed_hosts": [
+    "api-ap-southeast-1.modelarts-maas.com"
+  ],
+  "context_window_tokens": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 131072,
+  "output_reserve_tokens": 8192,
+  "limits_source": "https://support.huaweicloud.com/intl/en-us/bulletin-maas/bulletin-maas-0001.html; https://support.huaweicloud.com/intl/en-us/model-call-maas/usermanual_maas_0008.html",
+  "limits_observation": "Janela operacional configurada em 1M para glm-5.2 por decisão explícita do operador. Reserva 8K para output, dentro do máximo publicado de 128K. O novo limite e a combinação reasoning=max com thinking=disabled ainda requerem revalidação live."
+}

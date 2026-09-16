@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Diagrama de arquitetura</title>
+  <style>
+    :root {
+      --background: #0b1220;
+      --surface: #172238;
+      --surface-border: #ff9900;
+      --text: #f4f7fb;
+      --muted: #aab6ca;
+      --accent: #ff9900;
+      --confirmed: #4ade80;
+      --inferred: #facc15;
+      --unknown: #94a3b8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: clamp(1rem, 4vw, 3rem);
+      color: var(--text);
+      background: radial-gradient(circle at top, #152541 0, var(--background) 55%);
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+
+    main { width: min(100%, 1280px); margin: 0 auto; }
+    h1 { margin: 0; color: var(--accent); font-size: clamp(1.6rem, 4vw, 2.5rem); }
+    .subtitle { margin: .5rem 0 1.5rem; color: var(--muted); }
+
+    .diagram-card {
+      overflow: auto;
+      padding: clamp(1rem, 3vw, 2.5rem);
+      border: 2px solid var(--surface-border);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      box-shadow: 0 18px 50px rgb(0 0 0 / 35%);
+    }
+
+    .mermaid { display: flex; min-width: 680px; justify-content: center; }
+    .legend { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1.25rem; color: var(--muted); }
+    .legend span::before { content: ""; display: inline-block; width: .75rem; height: .75rem; margin-right: .4rem; border-radius: 3px; background: var(--unknown); }
+    .legend .confirmed::before { background: var(--confirmed); }
+    .legend .inferred::before { background: var(--inferred); }
+    footer { margin-top: 1rem; color: var(--muted); font-size: .85rem; }
+
+    @media (max-width: 720px) {
+      body { padding: .75rem; }
+      .diagram-card { padding: .75rem; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Arquitetura de referência</h1>
+    <p class="subtitle">Exemplo proposto — substitua componentes e relações com evidências do sistema analisado.</p>
+
+    <section class="diagram-card" aria-label="Diagrama de arquitetura">
+      <pre class="mermaid">
+flowchart TB
+    subgraph Clients[Clientes]
+        Web[Aplicação Web]
+        Mobile[Aplicativo Móvel]
+    end
+
+    subgraph Edge[Edge e entrada]
+        CDN[CDN e proteção]
+        API[API Gateway]
+    end
+
+    subgraph Services[Serviços]
+        Auth[Identidade]
+        App[Serviço de aplicação]
+        Worker[Worker assíncrono]
+    end
+
+    subgraph Data[Dados e mensageria]
+        Queue[Fila]
+        Database[(Banco de dados)]
+    end
+
+    Web --&gt; CDN
+    Mobile --&gt; API
+    CDN --&gt; API
+    API --&gt; Auth
+    API --&gt; App
+    App --&gt; Database
+    App -.-&gt; Queue
+    Queue -.-&gt; Worker
+    Worker --&gt; Database
+
+    classDef entry fill:#27364f,stroke:#ff9900,color:#ffffff,stroke-width:2px;
+    classDef service fill:#1d4ed8,stroke:#93c5fd,color:#ffffff;
+    classDef data fill:#166534,stroke:#86efac,color:#ffffff;
+    class CDN,API entry;
+    class Auth,App,Worker service;
+    class Queue,Database data;
+      </pre>
+    </section>
+
+    <div class="legend" aria-label="Legenda">
+      <span class="confirmed">Confirmado</span>
+      <span class="inferred">Inferido ou proposto</span>
+      <span>Desconhecido</span>
+    </div>
+    <footer>Mermaid carregado por CDN; a primeira renderização requer acesso de rede.</footer>
+  </main>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@12/dist/mermaid.esm.min.mjs";
+
+    mermaid.initialize({
+      startOnLoad: true,
+      securityLevel: "strict",
+      theme: "base",
+      flowchart: {
+        useMaxWidth: true,
+        htmlLabels: false,
+        curve: "basis"
+      },
+      themeVariables: {
+        background: "#172238",
+        primaryTextColor: "#f4f7fb",
+        lineColor: "#cbd5e1",
+        fontFamily: "Segoe UI, Arial, sans-serif"
+      }
+    });
+  </script>
+</body>
+</html>

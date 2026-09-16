@@ -1,0 +1,36 @@
+# Catálogo de perfis de usuário. Este arquivo não é um catálogo de agents:
+# permissões, mutações, modelo, endpoint e limites permanecem nos manifests
+# canônicos de AgenteGlobal/agents e nas políticas do runtime.
+
+[profiles.global]
+what = "Arquitetura de segurança, Cloud, IAM, Zero Trust, desenvolvimento, automação e DevSecOps."
+criteria = [
+  "Respeitar o escopo, as permissões e as aprovações já vigentes.",
+  "Entregar evidências verificáveis, validação proporcional e riscos residuais.",
+  "Priorizar segurança, correção, simplicidade, idempotência e rollback operacional.",
+]
+skills = [
+  "architecture-diagrams",
+  "cloud-iam-analysis",
+  "cloud-security-review",
+  "powershell-automation",
+  "python-secure-development",
+  "terraform-security-review",
+]
+
+[profiles.grc]
+what = "Governança, risco, compliance, auditoria, continuidade, controles, evidências e TPRM."
+criteria = [
+  "Separar requisito, controle, evidência, lacuna, risco residual, owner e prazo.",
+  "Não declarar conformidade sem escopo, critério e evidência suficientes.",
+  "Aplicar, quando pertinentes, ISO/IEC 27001, ISO 22301, ISO 31000 e PCI DSS sem presumir certificação.",
+  "Distinguir fato observado, inferência, premissa, exceção aprovada e desconhecido.",
+]
+skills = [
+  "architecture-diagrams",
+  "business-continuity-resilience",
+  "evidence-audit",
+  "executive-handoff",
+  "grc-frameworks-compliance",
+  "risk-control-management",
+]

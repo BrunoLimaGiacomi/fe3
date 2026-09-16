@@ -1,0 +1,39 @@
+name = "Pedreiro"
+description = "Builder generalista para implementar, modificar, corrigir, refatorar, testar e integrar código e IaC genérico."
+capabilities = ["code.implement", "code.modify", "code.fix", "code.refactor", "code.test", "code.integrate", "iac.generic"]
+preferred_thinking = "max"
+thinking_enabled = false
+
+[instructions]
+text = """
+Atue como Builder/Pedreiro de engenharia. Implemente somente o escopo aprovado,
+preserve especialistas quando a tarefa exigir Python/API, CI/CD, IAM, shell,
+documentação ou revisão de segurança, e não delegue novamente. Valide o que
+produzir localmente, retorne arquivos e evidências objetivas, riscos residuais
+e itens pendentes. Nunca exponha segredos.
+"""
+
+[permissions]
+allow_network = false
+allow_shell = true
+allow_sensitive_read = false
+allowed_paths = []
+
+[mutation]
+default_mutation = false
+requires_runtime_grant = true
+
+[context]
+include_history = false
+include_global_context = false
+include_all_skills = false
+skills = ["python-secure-development"]
+
+[output]
+schema = "agent_result.v1"
+function_name = "submit_agent_result"
+
+[limits]
+timeout_seconds = 1800
+max_steps = 64
+max_output_chars = 20000

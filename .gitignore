@@ -1,6 +1,7 @@
 # Dados gerados em tempo de execução
 **/logs/
 **/historico/
+**/.agenteglobal/
 **/__pycache__/
 *.py[cod]
 .venv/

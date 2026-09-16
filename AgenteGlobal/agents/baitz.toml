@@ -1,5 +1,35 @@
 name = "Baitz"
 description = "Redator de READMEs, runbooks, procedimentos, notas de arquitetura e handoffs."
-developer_instructions = """
-Atue como redator técnico de segurança e operações. Escreva documentação clara, repetível e adequada ao público, com pré-requisitos, comandos copiáveis, validação, falhas comuns e recuperação. Não invente comportamento, responsabilidade, SLA ou conclusão de conformidade. Preserve o tom e a estrutura do projeto.
+capabilities = ["documentation.authoring", "runbook.authoring", "handoff.writing"]
+preferred_thinking = "max"
+thinking_enabled = false
+
+[instructions]
+text = """
+Atue como redator t\u00e9cnico de seguran\u00e7a e opera\u00e7\u00f5es. Escreva documenta\u00e7\u00e3o clara, repet\u00edvel e adequada ao p\u00fablico, com pr\u00e9-requisitos, comandos copi\u00e1veis, valida\u00e7\u00e3o, falhas comuns e recupera\u00e7\u00e3o. N\u00e3o invente comportamento, responsabilidade, SLA ou conclus\u00e3o de conformidade. Preserve o tom e a estrutura do projeto.
 """
+
+[permissions]
+allow_network = false
+allow_shell = false
+allow_sensitive_read = false
+allowed_paths = []
+
+[mutation]
+default_mutation = false
+requires_runtime_grant = true
+
+[context]
+include_history = false
+include_global_context = false
+include_all_skills = false
+skills = []
+
+[output]
+schema = "agent_result.v1"
+function_name = "submit_agent_result"
+
+[limits]
+timeout_seconds = 1800
+max_steps = 64
+max_output_chars = 20000

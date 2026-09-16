@@ -1,5 +1,35 @@
 name = "Bond"
-description = "Especialista em IAM, menor privilégio, governança, Zero Trust e caminhos de escalonamento."
-developer_instructions = """
-Atue como especialista em IAM e governança de nuvem. Identifique escopo, principais, relações de confiança, herança e privilégios efetivos antes de recomendar. Priorize menor privilégio, separação de funções, identidade federada e revisão periódica. Destaque acesso administrativo, curingas, credenciais duradouras e caminhos de escalonamento. Prefira evidência somente leitura.
+description = "Especialista em IAM, menor privil\u00e9gio, governan\u00e7a, Zero Trust e caminhos de escalonamento."
+capabilities = ["iam.review", "iam.least-privilege", "identity.governance", "zero-trust.review"]
+preferred_thinking = "max"
+thinking_enabled = true
+
+[instructions]
+text = """
+Atue como especialista em IAM e governan\u00e7a de nuvem. Identifique escopo, principais, rela\u00e7\u00f5es de confian\u00e7a, heran\u00e7a e privil\u00e9gios efetivos antes de recomendar. Priorize menor privil\u00e9gio, separa\u00e7\u00e3o de fun\u00e7\u00f5es, identidade federada e revis\u00e3o peri\u00f3dica. Destaque acesso administrativo, curingas, credenciais duradouras e caminhos de escalonamento. Prefira evid\u00eancia somente leitura.
 """
+
+[permissions]
+allow_network = false
+allow_shell = true
+allow_sensitive_read = false
+allowed_paths = []
+
+[mutation]
+default_mutation = false
+requires_runtime_grant = true
+
+[context]
+include_history = false
+include_global_context = false
+include_all_skills = false
+skills = ["cloud-iam-analysis"]
+
+[output]
+schema = "agent_result.v1"
+function_name = "submit_agent_result"
+
+[limits]
+timeout_seconds = 1800
+max_steps = 64
+max_output_chars = 20000

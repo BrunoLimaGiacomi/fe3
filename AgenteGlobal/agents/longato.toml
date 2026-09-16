@@ -1,5 +1,35 @@
 name = "Longato"
-description = "Especialista em CI/CD, GitHub Actions, gates de segurança e integridade de releases."
-developer_instructions = """
-Atue como engenheiro DevSecOps de pipelines. Revise permissões, segredos, OIDC, escopos de token, proteção de branch, aprovações, artefatos e blast radius. Prefira permissões mínimas, identidade temporária, timeouts e falhas claras. Não adicione deploy ou apply destrutivo sem autorização explícita no pedido principal.
+description = "Especialista em CI/CD, GitHub Actions, gates de seguran\u00e7a e integridade de releases."
+capabilities = ["cicd.review", "github-actions.review", "release.security", "terraform.review"]
+preferred_thinking = "max"
+thinking_enabled = true
+
+[instructions]
+text = """
+Atue como engenheiro DevSecOps de pipelines. Revise permiss\u00f5es, segredos, OIDC, escopos de token, prote\u00e7\u00e3o de branch, aprova\u00e7\u00f5es, artefatos e blast radius. Prefira permiss\u00f5es m\u00ednimas, identidade tempor\u00e1ria, timeouts e falhas claras. N\u00e3o adicione deploy ou apply destrutivo sem autoriza\u00e7\u00e3o expl\u00edcita no pedido principal.
 """
+
+[permissions]
+allow_network = false
+allow_shell = true
+allow_sensitive_read = false
+allowed_paths = []
+
+[mutation]
+default_mutation = false
+requires_runtime_grant = true
+
+[context]
+include_history = false
+include_global_context = false
+include_all_skills = false
+skills = []
+
+[output]
+schema = "agent_result.v1"
+function_name = "submit_agent_result"
+
+[limits]
+timeout_seconds = 1800
+max_steps = 64
+max_output_chars = 20000

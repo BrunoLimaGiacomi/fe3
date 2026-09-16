@@ -1,332 +1,237 @@
-# Agentes De IA Locais
-Esse README explica o necessário para instalar, configurar, executar e diagnosticar qualquer distribuição de agente de IA deste repositório, incluindo especializações de GRC, segurança, desenvolvimento ou outras que sejam adicionadas futuramente.
+# AgenteGlobal
 
-Para a equipe de Auditoria, Riscos e Compliance, use o guia exclusivo e sem jargão em [`AgenteGRC/README.md`](AgenteGRC/README.md).
+O AgenteGlobal é um agente de terminal para automação, desenvolvimento,
+segurança de nuvem e GRC. Ele usa um endpoint Huawei MaaS compatível com a API
+OpenAI, consulta ferramentas locais com limites explícitos, mantém um DAG de
+tarefas e apresenta o progresso no terminal sem expor chain-of-thought,
+tokens, credenciais ou stdout integral.
 
-## Como Obter E Atualizar
+Esta distribuição é única. No primeiro acesso, escolha o perfil de trabalho:
 
-**Por padrão, baixe somente um agente.** Não é necessário manter todas as distribuições no computador.
+- `Global`: cloud, IAM, segurança, desenvolvimento, automação e DevSecOps.
+- `GRC`: governança, riscos, controles, auditoria, compliance e TPRM.
 
-**Não faça download em ZIP ou por qualquer opção que remova a pasta `.git`. Use o Git instalado no próprio computador.** A clonagem mantém o vínculo com este repositório para que futuras atualizações possam ser recebidas com `git pull`.
+A escolha é salva em `%APPDATA%\AgenteGlobal\user-profile.json` e não é
+perguntada novamente nas próximas execuções. O perfil altera orientação,
+critérios e Skills; permissões, políticas, modelo e endpoint continuam sendo
+controlados pelo runtime e pelos manifests em `AgenteGlobal/agents/`.
 
-Pré-requisito: Git instalado e acesso autorizado ao repositório:
+## Começo rápido
+
+Pré-requisitos: Windows x64, PowerShell e Python 3.11 ou superior. Acesse o
+diretório deste repositório e execute:
 
 ```powershell
-git --version
+.\setup.ps1
+.\AgenteGlobal\bin\agenteglobal.cmd --workspace .
 ```
 
-Use sparse checkout para deixar no diretório de trabalho somente o README, o `.gitignore` e o agente escolhido.
+Depois do setup, também é possível abrir `Ativador de Agente.cmd` com dois
+cliques. O setup copia o ativador para a Área de Trabalho e registra somente o
+caminho da instalação em `%APPDATA%\AgenteGlobal\install-path.txt`, portanto a
+cópia funciona fora da pasta do código. Pelo CMD, use:
 
-Para o agente de arquitetura:
-
-```powershell
-git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git AgenteGlobal
-Set-Location .\AgenteGlobal
-git sparse-checkout set --cone AgenteGlobal
-git remote -v
+```cmd
+AgenteGlobal\bin\agenteglobal.cmd --workspace .
 ```
 
-Para GRC:
+O `setup.ps1` instala, uma única vez e somente para o usuário atual do Windows,
+as dependências do runtime, Tree-sitter e Pyright. O launcher usa `py -3`
+diretamente: não cria, procura nem depende de venv. Para quem desenvolve ou
+testa o projeto, um ambiente isolado continua disponível como opção:
 
 ```powershell
-git clone --filter=blob:none --sparse https://github.com/uol-universo-online/uolcs-arq-sec-ias-de-si-maas.git AgenteGRC
-Set-Location .\AgenteGRC
-git sparse-checkout set --cone AgenteGRC
-git remote -v
+.\setup.ps1 -DevelopmentVenv
 ```
 
-O repositório continua conectado ao `origin/main`, mas somente a pasta selecionada aparece no diretório de trabalho. A pasta `.git` mantém a conexão e o histórico; ela não deve ser removida. Para trocar o agente sem clonar novamente, use `git sparse-checkout set --cone AgenteGlobal` ou `git sparse-checkout set --cone AgenteGRC`.
-
-O destino do clone e a distribuição usam o mesmo nome de propósito. O resultado do primeiro bloco é `AgenteGlobal\AgenteGlobal`; dentro da segunda pasta ficam `AgenteGlobal.py`, o core, o painel, as skills e as personalidades. Não existe mais um terceiro diretório `AgenteGlobal`. Para GRC, o resultado equivalente é `AgenteGRC\AgenteGRC`.
-
-Para atualizar uma cópia já clonada:
+Para automação não interativa na primeira execução, informe o perfil uma vez:
 
 ```powershell
-Set-Location .\AgenteGlobal
-git status --short
-git pull --ff-only origin main
+.\AgenteGlobal\bin\agenteglobal.cmd --user-profile global --workspace .
 ```
 
-Para GRC, use `Set-Location .\AgenteGRC` no lugar da primeira linha.
+Depois disso, o arquivo persistido em `APPDATA` prevalece e a opção não troca
+silenciosamente o perfil já escolhido.
 
-Execute o `git pull` na mesma pasta clonada. Não apague a pasta e faça novo download para atualizar. Se houver alterações locais, preserve-as e resolva a situação antes do pull; não use `reset --hard` para forçar a atualização.
+## Credencial e endpoint MaaS
 
-## Executar As Distribuições Atuais
+Use uma credencial provisionada pelo processo aprovado da organização. Ela pode
+ser fornecida por `HUAWEI_MAAS_API_KEY` ou por arquivo externo informado em
+`--api-key-file`. Nunca coloque a chave no repositório, em prompts, no
+histórico, nos artifacts, no terminal ou em logs. O runtime redige valores
+sensíveis, mas essa proteção não transforma arquivos locais em cofre.
 
-Execute cada agente a partir da própria pasta de distribuição. Isso garante que o core encontre o `AGENTS.md`, as skills e o `model-aliases.json` correspondentes:
+O endpoint e o modelo podem ser definidos por:
 
-```powershell
-Push-Location .\AgenteGlobal
-py -3 .\AgenteGlobal.py --help
-py -3 .\AgenteGlobal.py
-Pop-Location
+```text
+HUAWEI_MAAS_BASE_URL
+HUAWEI_MAAS_MODEL_ALIAS
+HUAWEI_MAAS_MODEL
 ```
 
-```powershell
-Push-Location .\AgenteGRC
-py -3 .\AgenteGRC.py --help
-py -3 .\AgenteGRC.py
-Pop-Location
+Aliases locais ficam em `AgenteGlobal/model-aliases.json`. O alias padrão é
+`primary`; não altere endpoint ou modelo para contornar autenticação ou policy.
+
+## O que pode ser editado facilmente
+
+Edite somente as constantes de `AgenteGlobal/Painel.py` e reinicie o agente.
+O arquivo lista os valores atuais e os intervalos aceitos:
+
+| Grupo | Variáveis |
+| --- | --- |
+| Execução/painel | `DEFAULT_MAX_STEPS`, `INITIAL_STEP_BUDGET`, `STEP_BUDGET_INCREMENT`, `DEFAULT_MAX_VISIBLE_TASKS` |
+| Delegação/workflow | `DEFAULT_MAX_SUBAGENTS`, `DEFAULT_SUBAGENT_MAX_STEPS`, `DEFAULT_SUBAGENT_TIMEOUT_SECONDS`, `DEFAULT_GOAL_MAX_ITERATIONS` |
+| Timeouts | `DEFAULT_TIMEOUT_SECONDS`, `DEFAULT_API_TIMEOUT_SECONDS`, `DEFAULT_API_RETRIES` |
+| Contexto local | `DEFAULT_HISTORY_FILES`, `DEFAULT_MAX_SEARCH_SCANNED_FILES` |
+
+O `ContextBudget` e a janela operacional de **1.000.000 tokens** são limites do
+runtime e não ficam expostos como uma constante livre no painel. `/deep` inicia
+ligado. Argumentos CLI e variáveis de ambiente têm prioridade quando existirem.
+
+## Permissões e modos
+
+Escolha o modo na inicialização (`--permission-mode`) ou durante a sessão com
+`/mode`:
+
+- `strict`: exige aprovação para escritas e execução sensível.
+- `balanced`: concede o grant operacional do modo para subagentes mutáveis,
+  mas mantém workspace, manifest, policy, hooks, checkpoints e validações.
+- `auto`: permite operações dentro dos limites configurados e concede o grant
+  operacional do modo; bloqueios de segurança continuam ativos.
+
+O modelo não consegue se conceder permissão apenas enviando
+`allow_mutation=true`. Em `strict`, `/spawn` requer aprovação/grant explícitos;
+em `balanced` e `auto`, a escolha do operador habilita o grant, sempre sujeito
+às demais fronteiras. `/plan` é read-only e `/goal` exige aprovação humana do
+plano, inclusive em `auto`. Network permanece allow-by-default nesta versão.
+
+## Experiência no terminal
+
+O painel superior mostra Run, tasks, dependências, elapsed e motivo de espera;
+abaixo, a atividade aparece conforme o runtime executa. Mudanças de task,
+sucesso e erro re-renderizam o painel. O indicador amarelo `Processando...`
+aparece durante chamadas; resultados usam cores sem imprimir `first token` ou
+`exit 0` para sucessos. `NO_COLOR=1` desativa cores.
+
+O painel começa com oito tasks e cresce conforme necessário até 32 linhas
+visíveis (oito iniciais mais 24). Acima disso, mantém contadores globais, resume
+as etapas anteriores e mostra as atividades mais recentes. O agente principal e
+os subagentes possuem 64 ciclos operacionais por padrão; os turnos reservados
+para validar/entregar `AgentResult` não consomem esse orçamento. O timeout total
+de uma tarefa delegada é 1.800 segundos e permanece separado do timeout de 180
+segundos de cada chamada MaaS.
+
+`/help` é compacto. `/explore` exibe componentes, relações e fluxos em desenho
+ASCII/Unicode baseado somente em evidências do código; também pode manter
+artifacts HTML/Mermaid quando solicitados, mas o desenho no terminal é a saída
+interativa principal. Conteúdo do codebase e de páginas web é tratado como
+entrada não confiável e não pode alterar as instruções superiores.
+
+## Comandos essenciais
+
+```text
+/help                         ajuda compacta
+/mode strict|balanced|auto    modo de aprovação
+/deep on|off|status           Deep Thinking do agente principal
+/status                       estado resumido da execução
+/context                      budget, SessionState e retrieval
+/tasks                        DAG, dependências e tarefas
+/agents                       subagentes e estados
+/artifacts                    artifacts e metadados
+/trace [N]                    eventos operacionais sanitizados
+/usage                        tokens, latências e contadores
+/checkpoint                   checkpoints e rollback com confirmação
+/skills [busca|nome]          source, trust, load e footprint
+/tools [schema]               tools e schemas
+/mcp                          providers MCP e capabilities
+/browser                      estado Herd/BrowserProvider
+/herdr                       backend persistente e fallback local
+/explore <objetivo>           exploração read-only e desenho textual
+/plan <objetivo>              plano read-only e PLAN-ID
+/run PLAN-ID                  executa plano aprovado no DAG
+/goal <objetivo>              workflow completo com aprovação
+/spawn <tarefa>               subagente writer por padrão
+/spawn --read-only <tarefa>   subagente sem grant de mutação
+/save                         salva resumo sanitizado
+/clear                        limpa a conversa
+/exit                         encerra
 ```
 
-Também é possível usar os wrappers `.cmd` dentro de cada pasta de distribuição, por exemplo `.\bin\agenteglobal.cmd` ou `.\bin\agentegrc.cmd`. Para uma nova distribuição, siga o mesmo padrão: entre na pasta dela e execute o arquivo de entrada indicado por `--help`.
+## Fluxo de trabalho
 
-## 1. O que é
+Para um pedido simples, o agente conversa e executa apenas o necessário. Para
+um `/goal` grande, o fluxo visível é:
 
-O agente é uma interface de terminal para um modelo MaaS compatível com a API OpenAI. A IA principal interpreta o pedido, consulta arquivos e ferramentas autorizadas, pode delegar tarefas e consolida o resultado.
-
-O modelo não substitui a aprovação humana em decisões de risco, alterações relevantes ou declarações de conformidade. A resposta deve separar fatos observados, inferências, premissas e lacunas.
-
-## 2. Pré-requisitos
-
-- Windows 64-bit x86-64 (AMD64) e PowerShell. Use [Git for Windows](https://gitforwindows.org/) com suporte a [sparse checkout](https://git-scm.com/docs/git-sparse-checkout).
-- Python 3.11 ou superior para Windows 64-bit x86-64. Baixe o instalador **Windows installer (64-bit)** na [página oficial do Python](https://www.python.org/downloads/windows/). Não use o instalador ARM64 em computadores AMD64.
-- Acesso de rede ao endpoint MaaS.
-- Acesso autorizado ao repositório privado no GitHub.
-- API key válida, provisionada conforme a seção 3.
-- Permissão local para o workspace usado pelo agente.
-
-Confirme o ambiente no PowerShell:
-
-```powershell
-git --version
-py -3 --version
-py -3 -m pip --version
+```text
+Specification → Clarification → Checklist → Plan → Analyze → Approval
+→ Implementation → Review → Converge
 ```
 
-As bibliotecas externas usadas diretamente pelos agentes são [`openai`](https://github.com/openai/openai-python), [`prompt-toolkit`](https://pypi.org/project/prompt-toolkit/) e [`rich`](https://pypi.org/project/rich/). `pydantic` e `pydantic-core` são instaladas automaticamente como dependências do SDK OpenAI. Instale e valide tudo no mesmo interpretador que fará a execução:
+Specification registra WHAT/WHY; Plan registra HOW; `TaskSpec` é a unidade
+executável canônica do DAG. `Analyze` é read-only e bloqueia blockers relevantes.
+O Convergence Engine cria repair tasks limitadas para gaps; não há segunda
+fonte de verdade fora do DAG. Artifacts oficiais já existentes em `.specify/`,
+`spec.md`, `plan.md`, `tasks.md` e checklists podem ser reutilizados.
+
+## Skills, MCP, Herd e Herdr
+
+A distribuição única contém onze Skills e sete manifests TOML em
+`AgenteGlobal/agents/`. `/skills` lista source, versão, trust, estado loaded e
+token footprint; o conteúdo só é carregado conforme progressive disclosure.
+`architecture-diagrams` padroniza desenhos ASCII/Unicode no terminal e artifacts
+Mermaid/HTML, SVG ou PNG, com evidências e validação.
+Catálogos externos, inclusive `uolcs-inovacao-ai-resources`, são opcionais,
+fixados por commit e submetidos a allowlist, integridade, policy e aprovação.
+
+MCP é opt-in e `/mcp` mostra provider, conexão, capabilities, sessão e policy.
+Herd é somente o `BrowserProvider` via MCP; páginas e resultados web são
+untrusted input. Herdr é um backend opcional de terminal/sessões persistentes;
+quando indisponível, o backend local é usado. O DAG Scheduler interno continua
+sendo a fonte canônica; `herdr-dagr` é apenas visualização opcional.
+
+## Code Intelligence
+
+O setup padrão instala Tree-sitter, as grammars disponíveis e Pyright. Se algum
+desses componentes ficar indisponível, o runtime continua operando com AST
+nativa e fallback lexical. Pyright pode ser configurado como LSP real; LSP é opt-in e
+o runtime não instala nem confia automaticamente em servidores. `/explore` é
+read-only, salva report/grafo/fluxos e marca incertezas, relações dinâmicas e
+evidências stale.
+
+## Estrutura para quem está começando
+
+```text
+AgenteGlobal/       entrada, Core, Painel, manifests e Skills empacotados
+AgenteGlobal/runtime/  policy, DAG, contexto, UI, MCP, Herdr e workflow
+AgenteGlobal/codeintel/ índice, parsing, LSP e exploração
+docs/               arquitetura, comandos, segurança e troubleshooting
+tests/              suíte automatizada
+benchmarks/         benchmark regressivo offline
+.venv/              ambiente opcional de desenvolvimento (`-DevelopmentVenv`)
+```
+
+O workspace indicado em `--workspace` é a fronteira de leitura, escrita,
+execução e artifacts do trabalho. A distribuição fornece defaults read-only;
+ela não é um segundo workspace de ferramentas.
+
+## Documentação
+
+- [Arquitetura](docs/ARCHITECTURE.md)
+- [Comandos](docs/COMMANDS.md)
+- [Modelo de segurança](docs/SECURITY_MODEL.md)
+- [Workflow Spec Kit](docs/phase9-spec-kit-quality-hardening-performance.md)
+- [Estado atual](docs/CURRENT_STATE.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Revisão do catálogo UOL](docs/uol-ai-resources-review.md)
+
+## Validação local
 
 ```powershell
-py -3 -m pip install --upgrade pip
-py -3 -m pip install --upgrade "openai>=1.0" "prompt-toolkit>=3.0" "rich>=13.0"
-py -3 -c "import sys; print(sys.executable)"
-py -3 -c "import openai, prompt_toolkit, rich; print('Dependencias OK')"
+py -3 -m unittest discover -s tests -v
+py -3 -m compileall -q AgenteGlobal
 py -3 -m pip check
+git diff --check
 ```
 
-O comando instala `openai`, `prompt-toolkit` e `rich`, além das bibliotecas auxiliares exigidas pelo `openai`, como `pydantic` e `pydantic-core`.
-
-Use sempre o mesmo interpretador para instalar os pacotes e executar o agente. Não é necessário instalar Node.js, GCC ou compiladores C para os agentes atuais.
-
-## 3. API key do MaaS
-
-**A API key do MaaS não é criada pelo usuário. A criação, o provisionamento, a rotação e a revogação são responsabilidades exclusivas de alguém autorizado do time de Arquitetura de Segurança.**
-
-Para obter acesso, solicite a credencial pelo processo interno aprovado, informando a distribuição, o ambiente, o endpoint e o workspace necessários. Não tente gerar uma chave em outro portal ou substituir a credencial por uma chave pessoal.
-
-Depois de receber a credencial por canal aprovado, use uma destas formas, conforme a distribuição:
-
-- Arquivo externo: `$HOME\cred\AgentA.txt`, contendo somente a chave.
-- Variável de ambiente: `HUAWEI_MAAS_API_KEY`.
-- Opção da execução: `--api-key-file "C:\caminho\da\credencial.txt"`.
-
-Não coloque a chave em código, no repositório, em `model-aliases.json`, no histórico, em prompts, em logs ou em chamados. Não exiba o conteúdo da chave durante testes. Se a credencial for exposta, interrompa o uso e solicite a rotação ao time de Arquitetura de Segurança.
-
-## 4. Endpoint, modelo e distribuição
-
-O endpoint e o modelo normalmente são definidos por:
-
-- `HUAWEI_MAAS_BASE_URL`;
-- `HUAWEI_MAAS_MODEL`;
-- `HUAWEI_MAAS_MODEL_ALIAS`;
-- `model-aliases.json`, quando fornecido pela distribuição.
-
-Esses valores devem ser fornecidos ou aprovados pelo time responsável pelo MaaS. Não altere endpoint ou modelo para contornar uma falha de autenticação ou política de acesso.
-
-Cada distribuição possui uma pasta e um arquivo de entrada. Para as distribuições atuais, use um dos blocos abaixo. O workspace é opcional; informe um caminho real somente quando quiser trabalhar fora da pasta clonada.
-
-```powershell
-Push-Location .\AgenteGlobal
-py -3 .\AgenteGlobal.py --help
-py -3 .\AgenteGlobal.py --workspace (Get-Location).Path
-Pop-Location
-```
-
-Para GRC, troque `AgenteGlobal` por `AgenteGRC` nas três linhas do bloco.
-
-O workspace é a referência para caminhos relativos, arquivos de contexto, histórico e logs. Use um workspace controlado e explícito quando a execução não ocorrer na pasta do projeto.
-
-## 5. Configuração local
-
-As opções podem ser informadas na linha de comando, por variáveis de ambiente ou pelo `Painel.py`, quando a distribuição fornecer esse arquivo. Argumentos e variáveis de ambiente equivalentes têm prioridade sobre os padrões do painel.
-
-O painel deve conter somente valores editáveis e explicações. Ele pode controlar:
-
-- máximo de steps por pedido;
-- orçamento inicial e expansão visual de steps;
-- quantidade de subagentes;
-- máximo de steps por subagente;
-- iterações do `/goal`;
-- timeout de comandos locais;
-- timeout e retries da API;
-- quantidade de históricos carregados;
-- quantidade de arquivos examinados em buscas.
-
-Edite somente os parâmetros documentados no próprio painel e reinicie o agente depois da alteração:
-
-```powershell
-Push-Location .\AgenteGlobal
-py -3 .\Painel.py
-Pop-Location
-```
-
-Para GRC, use `Push-Location .\AgenteGRC` no lugar da primeira linha.
-
-Os limites de segurança e de validação do core continuam valendo mesmo quando um valor do painel é alterado.
-
-## 6. Permissões e modos
-
-- `strict`: solicita aprovação para escrita e execução de comandos.
-- `balanced`: solicita aprovação para ações mutáveis, sobrescritas, caminhos sensíveis e comandos de maior risco.
-- `auto`: dispensa aprovação dentro dos escopos configurados.
-
-Use `strict` quando houver dúvida sobre o impacto. O modo `auto` não reduz o impacto de uma instrução incorreta do modelo.
-
-Restrinja os escopos quando possível:
-
-```powershell
-Push-Location .\AgenteGlobal
-py -3 .\AgenteGlobal.py --read-scope workspace --write-scope workspace --no-shell
-Pop-Location
-```
-
-Para GRC, troque `AgenteGlobal` por `AgenteGRC` no bloco.
-
-Antes de uma operação relevante, confira conta, tenant, projeto, região, workspace, escopos e impacto. Não autorize uma mutação só porque ela foi sugerida pelo modelo.
-
-## 7. Comandos interativos
-
-Os comandos variam conforme a distribuição. Quando disponíveis:
-
-```text
-/help                         mostra ajuda e caminhos efetivos
-/mode strict|balanced|auto    altera o modo de permissão
-/verbosity direto|normal|detalhado
-/plan <objetivo>              prepara um plano sem mutação
-/goal <objetivo>              executa ciclos com validação
-/spawn <tarefa>               invoca subagente com escrita por padrão
-/spawn --read-only <tarefa>   invoca subagente sem escrita, CLI ou PowerShell
-/spawn --profile baitz --read-only <tarefa>
-/save                         salva o resumo da sessão
-/clear                        limpa a memória atual
-/exit                         salva a sessão e encerra
-```
-
-`direto` responde somente o essencial. `normal` é o padrão recomendado. `detalhado` acrescenta contexto, evidências e etapas, sem dispensar objetividade.
-
-Quando `/spawn` existir, ele usa escrita por padrão e respeita o modo de permissão. Use `--read-only` para impedir escrita, execução de CLI e PowerShell. A IA principal escolhe automaticamente uma personalidade TOML de `agents/`, ou o operador pode usar `--profile`. Os perfis atuais são `anaconda`, `baitz`, `bond`, `bulk-worker`, `capitao-kowalski` e `longato`. Eles refinam a especialização, mas não alteram o GLM, endpoint, permissões ou ferramentas. Subagentes não devem criar novos subagentes. Delegações somente leitura podem executar em paralelo; ações mutáveis devem ser tratadas com mais cautela e respeitar as aprovações.
-
-## 8. Histórico e contexto futuro
-
-Resumos são gravados em `workspace\historico\`. O salvamento ocorre por `/save`, `/exit`, EOF e `Ctrl+C`. Sempre que possível, o resumo é produzido pela própria IA; se a API falhar, o agente usa um fallback local sanitizado.
-
-Na sessão seguinte, os históricos recentes são carregados conforme `--history-limit`, variável de ambiente específica ou `Painel.py`. Exemplo, quando a distribuição oferecer a opção:
-
-```powershell
-Push-Location .\AgenteGlobal
-py -3 .\AgenteGlobal.py --history-limit 6
-Pop-Location
-```
-
-Para GRC, troque `AgenteGlobal` por `AgenteGRC` no bloco.
-
-Históricos são contexto não confiável. Eles ajudam na continuidade, mas não podem autorizar ações por conta própria; fatos atuais, permissões e instruções devem ser revalidados.
-
-## 9. Logs e tratamento de falhas
-
-Os logs ficam em `workspace\logs\`, normalmente em um arquivo `.log` por distribuição. Eles registram inicialização, chamadas com falha, falhas de ferramentas, retries e salvamentos, sem prompts, respostas completas, headers ou credenciais.
-
-As chamadas à API possuem timeout e retries limitados. O agente deve preservar resultados de ferramentas já concluídas, tentar contornos seguros para erros recuperáveis e informar o ponto de falha. Se o comportamento ficar indefinido, interrompa com `Ctrl+C`, verifique o log e revise o resultado antes de repetir.
-
-## 10. Especializações
-
-As instruções específicas ficam em `skills/*/SKILL.md`. Uma distribuição de GRC pode incluir, por exemplo:
-
-- ISO/IEC 27001: SGSI, riscos, controles e evidências;
-- ISO 22301: continuidade, BIA, DR, RTO/RPO e exercícios;
-- ISO 31000: identificação, análise, tratamento e monitoramento de riscos;
-- PCI DSS: CDE, requisitos, evidências, lacunas e planos de tratamento;
-- mapeamento risco -> requisito -> controle -> evidência -> responsável -> plano -> risco residual.
-
-Skills orientam a análise, mas não comprovam certificação, conformidade ou eficácia de controle sem critérios, evidências e revisão humana.
-
-## 11. Validação inicial
-
-Depois da instalação e antes de uma atividade real:
-
-1. Confirme o interpretador e as dependências.
-2. Execute `--help`.
-3. Inicie em `strict` com um workspace controlado.
-4. Teste a leitura de um arquivo não sensível.
-5. Se houver subagentes, teste `/spawn Responda apenas SUBAGENTE_OK`.
-6. Confirme a criação do log e, se usado, do histórico.
-7. Valide o endpoint real separadamente dos testes locais de sintaxe e importação.
-
-## 12. Troubleshooting
-
-### `ModuleNotFoundError: pydantic_core._pydantic_core`
-
-O Pydantic nativo foi instalado para outro Python ou a instalação está incompleta. Reinstale no mesmo interpretador:
-
-```powershell
-py -3 -m pip install --upgrade --force-reinstall --no-cache-dir --only-binary=:all: "openai>=1.0" pydantic pydantic-core prompt_toolkit rich
-py -3 -c "import pydantic_core, pydantic, openai; print('Dependencias OK')"
-```
-
-O segundo comando deve terminar sem traceback.
-
-### `Connection error` ou timeout
-
-Verifique `HUAWEI_MAAS_BASE_URL`, DNS, proxy, firewall, VPN, disponibilidade do serviço e o log em `workspace\logs\`. O padrão da API é 180 segundos; use até `--api-timeout 300` se o MaaS estiver respondendo lentamente. `DEFAULT_TIMEOUT_SECONDS` controla somente comandos locais e não corrige demora da resposta do modelo. Retries não corrigem endpoint incorreto, indisponibilidade permanente ou credencial inválida.
-
-O runtime limita uma entrada colada a 80.000 caracteres e, quando a conversa cresce demais, omite da chamada somente turnos antigos completos, mantendo as regras e o pedido atual. Isso evita enviar contexto ilimitado, mas não substitui dividir documentos grandes: coloque-os no workspace e peça a leitura por partes. Aumentar o timeout não aumenta o contexto suportado pelo modelo.
-
-### `listando até 100 itens`
-
-Essa mensagem não é erro, quota de mensagens nem limite de tokens. `list_dir` lista até 100 arquivos e pastas por chamada para evitar uma varredura excessiva. O modelo pode consultar uma subpasta ou aumentar `max_entries` até 500 quando necessário.
-
-### HTTP 401 ou credencial rejeitada
-
-Não tente criar outra API key. Confirme apenas a existência do arquivo configurado, sem imprimir seu conteúdo, e solicite a validação ou rotação ao time de Arquitetura de Segurança. Verifique também se o endpoint, o ambiente e o modelo correspondem à credencial recebida.
-
-### `tools`, `tool_choice` ou `function` não funciona
-
-O endpoint ou modelo pode não oferecer function calling. Confirme essa capacidade com o time responsável pelo MaaS e faça primeiro um teste sem mutação. `--help` pode funcionar mesmo quando a integração de ferramentas está indisponível.
-
-### Subagente não é acionado
-
-Verifique se a distribuição oferece subagentes e teste, quando disponível:
-
-```text
-/spawn Responda apenas SUBAGENTE_OK
-```
-
-Se o comando direto funcionar, a delegação automática pode não ter sido escolhida pelo modelo. Se falhar, consulte os logs e valide API, endpoint, modelo e function calling.
-
-### Arquivo não encontrado ou acesso negado
-
-Confira o workspace, o caminho, `--read-scope`, `--write-scope` e o modo de permissão. Em `strict` e `balanced`, aprove a operação somente depois de conferir o destino e o impacto.
-
-### Histórico não foi carregado
-
-Confirme `workspace\historico\`, a extensão `.md`, `--history-limit`, o valor do painel ou da variável de ambiente e se o agente não foi iniciado com `--no-project-context`. Salve uma sessão curta e confirme o carregamento na próxima execução.
-
-### Caracteres acentuados aparecem incorretos
-
-Use arquivos UTF-8. No PowerShell:
-
-```powershell
-chcp 65001
-```
-
-### A IA propõe uma ação inesperada ou fica presa
-
-Se o modo `strict` mostrar `Aprovar? [y/N]:`, o agente está aguardando uma resposta e não deve repetir o painel a cada segundo. Digite `y` para aprovar ou pressione Enter para negar. `Ctrl+C` interrompe a execução. Se não houver uma pergunta de aprovação e o tempo da API tiver sido ultrapassado, consulte o log antes de repetir.
-
-## 13. Limitações
-
-- A integração depende da disponibilidade e compatibilidade do endpoint MaaS.
-- Testes de sintaxe, importação e `--help` não comprovam autenticação nem function calling.
-- Contextos e históricos grandes podem ser truncados.
-- O histórico sanitizado não é um cofre criptográfico.
-- A aprovação humana continua necessária para decisões de risco, mudanças relevantes e conclusões de auditoria.
+Não faça commit ou push automaticamente. Antes de operar em nuvem, confirme
+identidade, projeto/conta/tenant, região, escopo, impacto e rollback.

@@ -1,7 +1,0 @@
-{
-  "primary": "maas-current",
-  "default": "maas-current",
-  "subagent": "maas-current",
-  "maas-current": "glm-5.2",
-  "glm-current": "glm-5.2"
-}

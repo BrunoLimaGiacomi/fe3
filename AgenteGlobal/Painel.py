@@ -1,10 +1,13 @@
-"""Configurações locais e editáveis do AgenteGlobal.
+"""Painel de configurações editáveis do AgenteGlobal.
 
-Edite somente os valores abaixo. O AgenteGlobalCore importa estas constantes ao
-iniciar. Argumentos da linha de comando e variáveis de ambiente, quando
-existirem para a mesma opção, têm prioridade sobre este arquivo.
+Edite apenas os valores desta lista e reinicie o agente. Todas as constantes
+abaixo são consumidas pelo runtime atual; limites de segurança, política,
+escopo e aprovação continuam sendo aplicados pelo Core mesmo quando estes
+valores são alterados.
 
-Execute ``py -3 Painel.py`` para listar os valores e seus efeitos.
+Para conferir os valores sem iniciar o agente, execute ``Painel.py``. O
+launcher ``AgenteGlobal\\bin\\agenteglobal.cmd`` usa o Python instalado para o
+usuário, e ``setup.ps1`` instala as dependências sem exigir um venv.
 """
 
 from __future__ import annotations
@@ -13,56 +16,54 @@ import sys
 from typing import Final
 
 
-# Quantidade máxima padrão de ciclos modelo -> ferramenta em cada pedido.
-# Aumentar ajuda tarefas longas, mas pode elevar tempo e consumo da API.
+# Execução e painel visual
+# ------------------------
+# Teto de ciclos modelo -> ferramenta em cada pedido.
 DEFAULT_MAX_STEPS: int = 64
 
-# Quantos steps aparecem inicialmente no painel visual. Se forem usados, o
-# painel cresce em novos blocos até DEFAULT_MAX_STEPS.
+# Quantidade de tasks mostradas inicialmente no painel visual.
 INITIAL_STEP_BUDGET: int = 8
 
-# Quantos novos steps são acrescentados quando o orçamento visual se esgota.
-# Valores pequenos atualizam a previsão com mais frequência.
+# Quantas tasks são acrescentadas quando o orçamento visual se esgota.
 STEP_BUDGET_INCREMENT: int = 8
 
-# Máximo padrão de subagentes que a IA principal pode iniciar por pedido.
-# Aumentar permite mais frentes, mas também mais chamadas e possível custo.
+# O painel começa com 8 linhas e pode revelar até mais 24 conforme a tarefa cresce.
+DEFAULT_MAX_VISIBLE_TASKS: int = 32
+
+# Orquestração: limites padrão de delegação e do workflow /goal.
 DEFAULT_MAX_SUBAGENTS: int = 6
+DEFAULT_SUBAGENT_MAX_STEPS: int = 64
 
-# Máximo padrão de ciclos de cada subagente. Valores maiores permitem análises
-# mais profundas, com aumento de tempo e chamadas ao modelo.
-DEFAULT_SUBAGENT_MAX_STEPS: int = 4
-
-# Número padrão de iterações do comando /goal quando --max não for informado.
+# Timeout total de uma tarefa delegada. É separado do timeout de cada chamada MaaS.
+DEFAULT_SUBAGENT_TIMEOUT_SECONDS: int = 1800
 DEFAULT_GOAL_MAX_ITERATIONS: int = 5
 
-# Timeout padrão, em segundos, de comandos locais executados pelas ferramentas.
-# Aumentar ajuda comandos lentos; reduzir interrompe processos mais cedo.
+# Timeouts e tolerância transitória.
 DEFAULT_TIMEOUT_SECONDS: int = 60
 
-# Timeout padrão, em segundos, de cada chamada ao endpoint MaaS.
-# Aumentar tolera respostas lentas; reduzir detecta travamentos mais cedo.
 DEFAULT_API_TIMEOUT_SECONDS: float = 180.0
 
-# Número de novas tentativas após uma falha transitória da API.
-# Aumentar melhora tolerância a instabilidade, mas prolonga uma falha real.
+# Retries adicionais após falha transitória da API. Um valor maior aumenta a
+# tolerância, mas também pode prolongar uma falha real.
 DEFAULT_API_RETRIES: int = 1
 
-# Quantidade padrão de resumos recentes carregados de historico/.
-# Mais históricos melhoram continuidade, mas aumentam contexto e consumo.
+# Contexto local: histórico recente e limite de arquivos por busca.
 DEFAULT_HISTORY_FILES: int = 5
-
-# Quantidade padrão de arquivos examinados por search_text.
-# Aumentar amplia a busca e o tempo de varredura em workspaces grandes.
 DEFAULT_MAX_SEARCH_SCANNED_FILES: int = 5000
 
 
 CONFIGURACOES: Final[tuple[tuple[str, object, str], ...]] = (
     ("DEFAULT_MAX_STEPS", DEFAULT_MAX_STEPS, "ciclos máximos por pedido; permitido: 1 a 128"),
-    ("INITIAL_STEP_BUDGET", INITIAL_STEP_BUDGET, "steps exibidos inicialmente; permitido: 1 a 128"),
-    ("STEP_BUDGET_INCREMENT", STEP_BUDGET_INCREMENT, "steps adicionados por expansão; permitido: 1 a 128"),
+    ("INITIAL_STEP_BUDGET", INITIAL_STEP_BUDGET, "tasks exibidas inicialmente; permitido: 1 a 128"),
+    ("STEP_BUDGET_INCREMENT", STEP_BUDGET_INCREMENT, "tasks adicionadas por expansão; permitido: 1 a 128"),
+    ("DEFAULT_MAX_VISIBLE_TASKS", DEFAULT_MAX_VISIBLE_TASKS, "tasks visíveis após expansão; permitido: 8 a 32"),
     ("DEFAULT_MAX_SUBAGENTS", DEFAULT_MAX_SUBAGENTS, "subagentes por pedido; permitido: 0 a 10"),
-    ("DEFAULT_SUBAGENT_MAX_STEPS", DEFAULT_SUBAGENT_MAX_STEPS, "ciclos por subagente; permitido: 1 a 15"),
+    ("DEFAULT_SUBAGENT_MAX_STEPS", DEFAULT_SUBAGENT_MAX_STEPS, "ciclos por subagente; permitido: 1 a 128"),
+    (
+        "DEFAULT_SUBAGENT_TIMEOUT_SECONDS",
+        DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+        "timeout total por subagente; permitido: 60 a 86400 s",
+    ),
     ("DEFAULT_GOAL_MAX_ITERATIONS", DEFAULT_GOAL_MAX_ITERATIONS, "iterações padrão do /goal; permitido: 1 a 20"),
     ("DEFAULT_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS, "timeout de comandos locais; permitido: 1 a 120 s"),
     ("DEFAULT_API_TIMEOUT_SECONDS", DEFAULT_API_TIMEOUT_SECONDS, "timeout da API; permitido: 5 a 300 s"),
@@ -82,10 +83,11 @@ def main() -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
     name_width = max(len(name) for name, _, _ in CONFIGURACOES)
     print("Painel de configurações do AgenteGlobal")
-    print("Edite as constantes no início deste arquivo e reinicie o agente.\n")
+    print("Edite as constantes deste arquivo e reinicie o agente.\n")
     for name, value, description in CONFIGURACOES:
         print(f"{name:<{name_width}} = {value!r}")
         print(f"  {description}")
+    print("\nFixos do runtime: contexto operacional = 1.000.000 tokens; /deep = on.")
     return 0
 
 
