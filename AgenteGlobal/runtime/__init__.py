@@ -64,6 +64,7 @@ from .run_journal import (
     plan_digest,
 )
 from .mcp import MCPCallResult, MCPProvider, MCPRegistry, MCPStatus, MCPTool
+from .mcp_transport import StdioMCPProvider
 from .metrics import LocalMetricsCollector, LocalMetricsStore, MetricsSnapshot
 from .mutation_policy import (
     MutationGrantDecision,
@@ -188,6 +189,7 @@ __all__ = [
     "MCPRegistry",
     "MCPStatus",
     "MCPTool",
+    "StdioMCPProvider",
     "PHASE3_EVENT_NAMES",
     "PHASE5_EVENT_NAMES",
     "PHASE6_EVENT_NAMES",

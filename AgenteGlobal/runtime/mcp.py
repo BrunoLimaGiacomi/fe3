@@ -18,9 +18,11 @@ from .policies import PolicyEngine, PolicyRequest
 from .security_text import redact_sensitive_text
 
 
-_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$")
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_INLINE_BYTES = 64 * 1024
+DEFAULT_MAX_TOOLS_PER_PROVIDER = 256
+DEFAULT_MAX_SCHEMA_BYTES = 256 * 1024
 
 
 class MCPError(RuntimeError):
@@ -60,7 +62,10 @@ class MCPTool:
         if not 0.1 <= float(self.timeout_seconds) <= 600:
             raise ValueError("MCP timeout precisa estar entre 0.1 e 600 segundos")
         object.__setattr__(self, "permissions", tuple(str(item) for item in self.permissions))
-        object.__setattr__(self, "input_schema", MappingProxyType(dict(self.input_schema)))
+        schema = dict(self.input_schema)
+        if len(json.dumps(schema, ensure_ascii=False, default=str).encode("utf-8")) > DEFAULT_MAX_SCHEMA_BYTES:
+            raise ValueError("MCP input_schema excede o limite")
+        object.__setattr__(self, "input_schema", MappingProxyType(schema))
 
     @property
     def qualified_name(self) -> str:
@@ -107,14 +112,18 @@ class MCPRegistry:
         event_bus: Any = None,
         artifact_store: ArtifactStore | None = None,
         max_inline_bytes: int = DEFAULT_MAX_INLINE_BYTES,
+        max_tools_per_provider: int = DEFAULT_MAX_TOOLS_PER_PROVIDER,
     ) -> None:
         if max_inline_bytes < 1 or max_inline_bytes > 16 * 1024 * 1024:
             raise ValueError("max_inline_bytes fora do limite")
+        if max_tools_per_provider < 1 or max_tools_per_provider > 10_000:
+            raise ValueError("max_tools_per_provider fora do limite")
         self.policy_engine = policy_engine or PolicyEngine()
         self.hooks = hooks
         self.event_bus = event_bus
         self.artifact_store = artifact_store
         self.max_inline_bytes = max_inline_bytes
+        self.max_tools_per_provider = max_tools_per_provider
         self._providers: dict[str, _ProviderRecord] = {}
 
     def register(self, name: str, provider: MCPProvider, *, enabled: bool = True) -> None:
@@ -170,7 +179,9 @@ class MCPRegistry:
             return status
         try:
             discovered = await self._resolve(record.provider.list_tools())
-            for item in tuple(discovered):
+            for index, item in enumerate(discovered):
+                if index >= self.max_tools_per_provider:
+                    raise MCPError("provider MCP excedeu o limite de tools")
                 tool = item if isinstance(item, MCPTool) else MCPTool(provider=record.name, **dict(item))
                 if tool.provider != record.name:
                     raise MCPError("tool MCP declarou provider divergente")
@@ -273,6 +284,8 @@ class MCPRegistry:
 
 __all__ = [
     "MCPCallResult",
+    "DEFAULT_MAX_SCHEMA_BYTES",
+    "DEFAULT_MAX_TOOLS_PER_PROVIDER",
     "MCPError",
     "MCPProvider",
     "MCPRegistry",

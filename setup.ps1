@@ -6,10 +6,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot ".")).Path
-$baseRequirements = Join-Path $repositoryRoot "requirements-poc.txt"
-$codeIntelligenceRequirements = Join-Path $repositoryRoot "requirements-codeintel.txt"
+$requirements = Join-Path $repositoryRoot "requirements.txt"
 $installationStateDirectory = Join-Path $env:APPDATA "AgenteGlobal"
 $installationStateFile = Join-Path $installationStateDirectory "install-path.txt"
+$bootstrapSource = Join-Path $repositoryRoot "AgenteGlobal\bin\launch.ps1"
+$bootstrapDestination = Join-Path $installationStateDirectory "launch.ps1"
+$nativeWorkspace = Join-Path $repositoryRoot "AgenteGlobal\WorkSpaceNativo"
 $portableLauncher = Join-Path $repositoryRoot "Ativador de Agente.cmd"
 
 if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
@@ -21,7 +23,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "O AgenteGlobal exige Python 3.11 ou superior."
 }
 
-& py -3 -m pip install --disable-pip-version-check --user --requirement $baseRequirements --requirement $codeIntelligenceRequirements
+& py -3 -m pip install --disable-pip-version-check --user --requirement $requirements
 if ($LASTEXITCODE -ne 0) {
     throw "A instalação das dependências do AgenteGlobal falhou."
 }
@@ -29,7 +31,7 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "O Python do usuário possui dependências incompatíveis."
 }
-& py -3 -c "import agents, openai, pydantic, prompt_toolkit, rich, tree_sitter, tree_sitter_language_pack; print('Dependências do AgenteGlobal: OK')"
+& py -3 -c "import agents, mcp, openai, pydantic, prompt_toolkit, rich, tree_sitter, tree_sitter_language_pack; print('Dependências do AgenteGlobal: OK')"
 if ($LASTEXITCODE -ne 0) {
     throw "As dependências foram instaladas, mas não puderam ser importadas."
 }
@@ -44,7 +46,7 @@ if ($DevelopmentVenv) {
     if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
         & py -3 -m venv $venvRoot
     }
-    & $venvPython -m pip install --disable-pip-version-check --requirement $baseRequirements --requirement $codeIntelligenceRequirements
+    & $venvPython -m pip install --disable-pip-version-check --requirement $requirements
     if ($LASTEXITCODE -ne 0) {
         throw "A instalação no ambiente opcional de desenvolvimento falhou."
     }
@@ -59,9 +61,15 @@ if ($CodeIntelligence) {
     Write-Warning "-CodeIntelligence não é mais necessário: o setup padrão já instala esse suporte."
 }
 
+New-Item -ItemType Directory -Path $nativeWorkspace -Force | Out-Null
 New-Item -ItemType Directory -Path $installationStateDirectory -Force | Out-Null
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($installationStateFile, $repositoryRoot, $utf8WithoutBom)
+Copy-Item -LiteralPath $bootstrapSource -Destination $bootstrapDestination -Force
+& reg.exe add "HKCU\Software\AgenteGlobal" /v InstallPath /t REG_SZ /d $repositoryRoot /f 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Não foi possível registrar o caminho no HKCU; o ativador usará o estado UTF-8 em APPDATA."
+}
 
 $desktopDirectory = [Environment]::GetFolderPath("Desktop")
 if ($desktopDirectory -and (Test-Path -LiteralPath $portableLauncher -PathType Leaf)) {

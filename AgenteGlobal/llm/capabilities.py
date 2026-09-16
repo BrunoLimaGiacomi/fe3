@@ -76,6 +76,7 @@ class ModelCapabilities(BaseModel):
     parallel_tools: CapabilityEvidence = Field(default_factory=CapabilityEvidence)
     reasoning_none: CapabilityEvidence = Field(default_factory=CapabilityEvidence)
     reasoning_max: CapabilityEvidence = Field(default_factory=CapabilityEvidence)
+    reasoning_max_only: CapabilityEvidence = Field(default_factory=CapabilityEvidence)
     json_object: CapabilityEvidence = Field(default_factory=CapabilityEvidence)
     json_schema: CapabilityEvidence = Field(default_factory=CapabilityEvidence)
     structured_fallback: CapabilityEvidence = Field(default_factory=CapabilityEvidence)

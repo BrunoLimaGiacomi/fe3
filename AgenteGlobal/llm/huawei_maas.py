@@ -387,11 +387,12 @@ class HuaweiMaaSAdapter:
         if request.capability_probe:
             return
 
-        required: list[str] = [
-            "reasoning_none"
-            if request.reasoning_mode is ReasoningMode.NORMAL
-            else "reasoning_max"
-        ]
+        reasoning_capability = {
+            ReasoningMode.NORMAL: "reasoning_none",
+            ReasoningMode.MAX_ONLY: "reasoning_max_only",
+            ReasoningMode.DEEP: "reasoning_max",
+        }[request.reasoning_mode]
+        required: list[str] = [reasoning_capability]
         if streaming:
             required.append("streaming")
         if request.tools is not None:

@@ -364,6 +364,158 @@ class CodeIndexer:
             parse_error=parsed.error,
         )
 
+    def _sync_path(self, value: Path | str) -> tuple[Path, str]:
+        """Resolve one source path without following a symlink supplied by a caller."""
+
+        raw = Path(value)
+        lexical = raw if raw.is_absolute() else self.root / raw
+        candidate = lexical.resolve(strict=False)
+        try:
+            relative = candidate.relative_to(self.root).as_posix()
+        except ValueError as error:
+            raise ValueError("sync path resolves outside workspace") from error
+
+        # ``Path.resolve`` can canonicalize Windows short names and would make
+        # an in-workspace symlink appear to be its target.  Walk the original
+        # lexical path separately, bounded by its component count, so a
+        # symlinked file or parent is still rejected without relying on string
+        # equality between long and 8.3 path forms.
+        current = lexical
+        for _ in range(len(lexical.parts) + 2):
+            if current.is_symlink():
+                raise CodeIndexError("refusing symlinked sync path")
+            if current.resolve(strict=False) == self.root:
+                break
+            parent = current.parent
+            if parent == current:
+                raise ValueError("sync path escapes workspace")
+            current = parent
+        else:
+            raise ValueError("sync path escapes workspace")
+        return candidate, relative
+
+    def sync_file(
+        self,
+        path: Path | str,
+        *,
+        index: CodeIndex | None = None,
+    ) -> tuple[CodeIndex, IndexRunMetrics]:
+        """Update one file record and persist the resulting snapshot atomically.
+
+        This operation deliberately does not call :meth:`_iter_files`.  It is
+        used after a successful workspace write, where a full tree scan would
+        make the write callback depend on the size of the repository.  Missing
+        and unsupported paths remove an existing record; a read or persistence
+        failure raises while leaving the supplied in-memory snapshot untouched.
+        """
+
+        started = time.perf_counter()
+        target, relative = self._sync_path(path)
+        if index is None:
+            loaded, cache_corrupt = self._load()
+            if cache_corrupt:
+                raise CodeIndexCorruptError("index cache is corrupt and must be rebuilt")
+            index = loaded
+        elif index.root != self.root:
+            raise ValueError("index belongs to another workspace")
+
+        previous = index.files
+        prior = previous.get(relative)
+        updated = dict(previous)
+        scanned = indexed = unchanged = new = modified = deleted = skipped = 0
+        changed = False
+
+        # Excluded directories are never admitted by the full scanner.  Treat a
+        # direct sync request for one as a removal to keep cache state coherent.
+        excluded = any(part in self.excluded_directories for part in Path(relative).parts[:-1])
+        supported = target.suffix.lower() in LANGUAGE_BY_SUFFIX
+        if excluded or not supported or target.is_symlink() or not target.is_file():
+            if prior is not None:
+                del updated[relative]
+                deleted = 1
+                changed = True
+            else:
+                skipped = 1
+        else:
+            scanned = 1
+            try:
+                stat = target.stat()
+                raw = target.read_bytes()
+            except FileNotFoundError:
+                if prior is not None:
+                    del updated[relative]
+                    deleted = 1
+                    changed = True
+                else:
+                    skipped = 1
+            except OSError as error:
+                raise CodeIndexError(f"unable to read sync path {relative}: {type(error).__name__}") from error
+            else:
+                digest = hashlib.sha256(raw).hexdigest()
+                if prior is not None and prior.content_hash == digest:
+                    candidate_record = prior
+                    if prior.size != len(raw) or prior.mtime_ns != stat.st_mtime_ns:
+                        candidate_record = prior.model_copy(
+                            update={"size": len(raw), "mtime_ns": max(0, int(stat.st_mtime_ns))}
+                        )
+                    updated[relative] = candidate_record
+                    unchanged = 1
+                    changed = candidate_record != prior
+                else:
+                    candidate_record = self._record(target, raw=raw, stat=stat)
+                    updated[relative] = candidate_record
+                    indexed = 1
+                    changed = True
+                    if prior is None:
+                        new = 1
+                    else:
+                        modified = 1
+
+        duration = max(0.0, time.perf_counter() - started)
+        if changed:
+            now = _now()
+            symbol_count = sum(len(record.symbols) for record in updated.values())
+            relationship_count = sum(len(record.relationships) for record in updated.values())
+            snapshot = CodeIndexSnapshot(
+                metadata=IndexMetadata(
+                    schema_version=CODE_INDEX_SCHEMA_VERSION,
+                    workspace_fingerprint=_workspace_fingerprint(self.root),
+                    created_at=index.metadata.created_at,
+                    updated_at=now,
+                    file_count=len(updated),
+                    symbol_count=symbol_count,
+                    relationship_count=relationship_count,
+                    last_build_seconds=duration,
+                ),
+                files=updated,
+            )
+            candidate = CodeIndex(self.root, snapshot)
+            # Publish only after fsync + atomic replace.  A failed or oversized
+            # serialization therefore cannot leave memory newer than disk.
+            self._persist(candidate)
+            index.snapshot = candidate.snapshot
+        else:
+            symbol_count = index.metadata.symbol_count
+            relationship_count = index.metadata.relationship_count
+
+        metrics = IndexRunMetrics(
+            duration_seconds=duration,
+            scanned_files=scanned,
+            indexed_files=indexed,
+            unchanged_files=unchanged,
+            new_files=new,
+            modified_files=modified,
+            deleted_files=deleted,
+            skipped_files=skipped,
+            symbols_indexed=symbol_count,
+            relationships_indexed=relationship_count,
+            cache_hits=unchanged,
+            cache_misses=indexed,
+            rebuilt=False,
+            details={"mode": "incremental", "path": relative},
+        )
+        return index, metrics
+
     def _persist(self, index: CodeIndex) -> None:
         parent = self.index_path.parent
         parent.mkdir(parents=True, exist_ok=True)
@@ -450,7 +602,7 @@ class CodeIndexer:
         duration = max(0.0, time.perf_counter() - started)
         symbol_count = sum(len(record.symbols) for record in updated.values())
         relationship_count = sum(len(record.relationships) for record in updated.values())
-        index.snapshot = CodeIndexSnapshot(
+        snapshot = CodeIndexSnapshot(
             metadata=IndexMetadata(
                 schema_version=CODE_INDEX_SCHEMA_VERSION,
                 workspace_fingerprint=_workspace_fingerprint(self.root),
@@ -463,7 +615,10 @@ class CodeIndexer:
             ),
             files=updated,
         )
-        self._persist(index)
+        candidate = CodeIndex(self.root, snapshot)
+        # Keep the in-memory object transactional with the durable cache.
+        self._persist(candidate)
+        index.snapshot = candidate.snapshot
         metrics = IndexRunMetrics(
             duration_seconds=duration,
             scanned_files=scanned,

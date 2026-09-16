@@ -501,11 +501,13 @@ class SpecKitAnalyzeGate:
                 )
 
         if internal_plan is not None:
-            official_ids = {task.task_id for task in mapping.tasks}
-            internal_ids = {
-                str(task.metadata.get("spec_kit_task_id") or task.task_id)
+            official_by_id = {task.task_id: task for task in mapping.tasks}
+            internal_by_id = {
+                str(task.metadata.get("spec_kit_task_id") or task.task_id): task
                 for task in internal_plan.tasks
             }
+            official_ids = set(official_by_id)
+            internal_ids = set(internal_by_id)
             for task_id in sorted(official_ids - internal_ids):
                 findings.append(
                     AnalyzeFinding(
@@ -526,6 +528,73 @@ class SpecKitAnalyzeGate:
                         (task_id,),
                     )
                 )
+
+            def normalized_text(value: str) -> str:
+                return " ".join(value.casefold().split())
+
+            def normalized_resources(values: Sequence[str]) -> set[str]:
+                return {normalized_text(value.replace("\\", "/")) for value in values}
+
+            for task_id in sorted(official_ids & internal_ids):
+                official = official_by_id[task_id]
+                internal = internal_by_id[task_id]
+                artifact = str(official.metadata.get("spec_kit_source", "tasks.md"))
+                references = (task_id,)
+                if normalized_text(official.objective) != normalized_text(internal.objective):
+                    findings.append(
+                        AnalyzeFinding(
+                            "SPEC_TASK_OBJECTIVE_MISMATCH",
+                            AnalyzeSeverity.BLOCKER,
+                            f"Task interna {task_id} diverge do objetivo oficial",
+                            artifact,
+                            references,
+                        )
+                    )
+                if set(official.dependencies) != set(internal.dependencies):
+                    findings.append(
+                        AnalyzeFinding(
+                            "SPEC_TASK_DEPENDENCY_MISMATCH",
+                            AnalyzeSeverity.BLOCKER,
+                            f"Task interna {task_id} diverge das dependências oficiais",
+                            artifact,
+                            references,
+                        )
+                    )
+                if official.read_only != internal.read_only:
+                    findings.append(
+                        AnalyzeFinding(
+                            "SPEC_TASK_MUTATION_MISMATCH",
+                            AnalyzeSeverity.BLOCKER,
+                            f"Task interna {task_id} diverge do modo de mutação oficial",
+                            artifact,
+                            references,
+                        )
+                    )
+                if (
+                    normalized_resources(official.read_set) != normalized_resources(internal.read_set)
+                    or normalized_resources(official.write_set) != normalized_resources(internal.write_set)
+                ):
+                    findings.append(
+                        AnalyzeFinding(
+                            "SPEC_TASK_RESOURCE_SCOPE_MISMATCH",
+                            AnalyzeSeverity.BLOCKER,
+                            f"Task interna {task_id} diverge dos recursos oficiais",
+                            artifact,
+                            references,
+                        )
+                    )
+                official_criteria = {normalized_text(value) for value in official.acceptance_criteria}
+                internal_criteria = {normalized_text(value) for value in internal.acceptance_criteria}
+                if not official_criteria.issubset(internal_criteria):
+                    findings.append(
+                        AnalyzeFinding(
+                            "SPEC_TASK_ACCEPTANCE_MISMATCH",
+                            AnalyzeSeverity.BLOCKER,
+                            f"Task interna {task_id} perdeu critérios de aceite oficiais",
+                            artifact,
+                            references,
+                        )
+                    )
 
         plan_text = _combined(artifacts.plan)
         spec_text = _combined(artifacts.specification)

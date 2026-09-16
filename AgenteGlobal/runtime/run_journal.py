@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
@@ -106,10 +107,11 @@ def _sanitize(value: Any, *, depth: int = 0) -> Any:
                 result["_truncated"] = True
                 break
             key = str(raw_key)[:256]
-            # The harness-generated idempotency key is a non-secret digest and
-            # must survive persistence; the generic key-name rule otherwise
-            # classifies every ``*_key`` field as sensitive.
-            sensitive = is_sensitive_key_name(key) and key.lower() != "idempotency_key"
+            # These contract fields contain a digest or an integer budget, not
+            # credentials. The generic key-name rule otherwise classifies
+            # every ``*_key``/``*token*`` field as sensitive.
+            safe_contract_fields = {"idempotency_key", "token_budget"}
+            sensitive = is_sensitive_key_name(key) and key.lower() not in safe_contract_fields
             result[key] = "[REDACTED]" if sensitive else _sanitize(child, depth=depth + 1)
         return result
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -284,7 +286,17 @@ class RunJournal:
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary_name, destination)
+            # OneDrive, antivirus and indexers can hold the destination for a
+            # few milliseconds on Windows. Keep the operation atomic, but
+            # tolerate that transient sharing violation within a tiny bound.
+            for attempt, delay in enumerate((0.01, 0.025, 0.05, 0.0)):
+                try:
+                    os.replace(temporary_name, destination)
+                    break
+                except PermissionError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(delay)
             temporary_name = None
             try:
                 directory_fd = os.open(self.directory, os.O_RDONLY)
@@ -365,6 +377,66 @@ class RunJournal:
                 raise RunJournalError(f"run already exists: {selected_id}")
             self._persist(record)
             self._active_run_id = selected_id
+            return record
+
+    def register_tasks(self, run_id: str, tasks: list[TaskSpec] | tuple[TaskSpec, ...]) -> RunRecord:
+        """Atomically add runtime-created repair tasks before they can execute."""
+
+        selected = tuple(tasks)
+        if not selected:
+            return self.load(run_id)
+        if any(not isinstance(task, TaskSpec) for task in selected):
+            raise TypeError("tasks must contain only TaskSpec")
+        with self._lock:
+            record = self.load(run_id)
+            incoming_ids = [task.task_id for task in selected]
+            if len(set(incoming_ids)) != len(incoming_ids):
+                raise RunJournalError("duplicate task IDs in runtime registration")
+            if len(record.tasks) + sum(task_id not in record.tasks for task_id in incoming_ids) > MAX_RUN_TASKS:
+                raise RunJournalError("run task limit exceeded")
+            known_ids = {*record.tasks, *incoming_ids}
+            unknown_dependencies = sorted(
+                {
+                    dependency
+                    for task in selected
+                    for dependency in task.dependencies
+                    if dependency not in known_ids
+                }
+            )
+            if unknown_dependencies:
+                raise RunJournalError(
+                    f"runtime tasks reference unknown dependencies: {unknown_dependencies}"
+                )
+            for task in selected:
+                serialized = task.model_dump(mode="json")
+                existing = record.task_specs.get(task.task_id)
+                if existing is not None:
+                    comparable_existing = json.loads(json.dumps(existing))
+                    legacy_limits = comparable_existing.get("limits")
+                    serialized_limits = serialized.get("limits")
+                    if (
+                        isinstance(legacy_limits, dict)
+                        and isinstance(serialized_limits, dict)
+                        and legacy_limits.get("token_budget") == "[REDACTED]"
+                    ):
+                        # Journals produced before token_budget was recognized
+                        # as a non-secret contract field lost only this value.
+                        legacy_limits["token_budget"] = serialized_limits.get("token_budget")
+                    if comparable_existing != _sanitize(serialized):
+                        raise RunJournalError(
+                            f"runtime task conflicts with durable task: {task.task_id}"
+                        )
+                    continue
+                record.task_specs[task.task_id] = serialized
+                record.dependencies[task.task_id] = list(task.dependencies)
+                record.tasks[task.task_id] = TaskExecutionRecord(
+                    task_id=task.task_id,
+                    read_only=task.read_only,
+                    idempotent=bool(task.metadata.get("idempotent", False)),
+                    idempotency_key=idempotency_key(run_id, task.task_id),
+                    last_reason="runtime_task_registered",
+                )
+            self._persist(record)
             return record
 
     def _next_run_id(self) -> str:

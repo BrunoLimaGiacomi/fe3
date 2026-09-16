@@ -61,22 +61,25 @@ class CodeIntelligenceRuntime:
         if self.event_bus is not None:
             await self.event_bus.emit(name, source="codeintel", payload=payload)
 
+    def _install_index(self, index: CodeIndex) -> None:
+        self.index = index
+        if self.lsp_manager is None:
+            self.lsp_manager = LSPManager(
+                self.workspace,
+                index,
+                providers=self.lsp_providers,
+                event_bus=self.event_bus,
+            )
+        else:
+            self.lsp_manager.index = index
+
     async def refresh(self, *, force_rebuild: bool = False) -> CodeIndex:
         async with self._refresh_lock:
             index, metrics = await asyncio.to_thread(
                 self.indexer.build,
                 force_rebuild=force_rebuild,
             )
-            self.index = index
-            if self.lsp_manager is None:
-                self.lsp_manager = LSPManager(
-                    self.workspace,
-                    index,
-                    providers=self.lsp_providers,
-                    event_bus=self.event_bus,
-                )
-            else:
-                self.lsp_manager.index = index
+            self._install_index(index)
         await self._emit("code_index.updated", metrics.model_dump(mode="json"))
         return index
 
@@ -88,14 +91,31 @@ class CodeIntelligenceRuntime:
         file write as failed.
         """
 
-        candidate = Path(path).resolve(strict=False)
+        lexical = Path(path)
+        if not lexical.is_absolute():
+            lexical = self.workspace / lexical
+        if lexical.is_symlink():
+            await self._emit("code_index.write_sync_skipped", {"reason": "symlink"})
+            return
+        candidate = lexical.resolve(strict=False)
         try:
             relative = candidate.relative_to(self.workspace).as_posix()
         except ValueError:
             await self._emit("code_index.write_sync_skipped", {"reason": "outside_workspace"})
             return
         try:
-            index = await self.refresh()
+            async with self._refresh_lock:
+                # A first use can load an existing cache or start a small
+                # targeted cache; it never needs a tree build merely because a
+                # write callback ran.  A complete index remains available via
+                # the explicit refresh/explore path.
+                index, metrics = await asyncio.to_thread(
+                    self.indexer.sync_file,
+                    lexical,
+                    index=self.index,
+                )
+                self._install_index(index)
+            await self._emit("code_index.updated", metrics.model_dump(mode="json"))
             record = index.files.get(relative)
             if self.lsp_manager is None:
                 return
@@ -124,6 +144,14 @@ class CodeIntelligenceRuntime:
                     "lsp_synced": result.lsp_synced,
                     "fallback_used": not result.lsp_synced,
                 },
+            )
+        except asyncio.CancelledError:
+            # The workspace write completed before this callback was entered.
+            # Do not let cancellation of a slow optional index/LSP operation
+            # rewrite that successful write as a cancelled tool result.
+            await self._emit(
+                "code_index.write_sync_failed",
+                {"path": relative, "error": "CancelledError"},
             )
         except Exception as error:
             await self._emit(

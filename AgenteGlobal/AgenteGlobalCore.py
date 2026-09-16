@@ -26,7 +26,7 @@ from typing import Any, Awaitable, Callable, Sequence
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAIError
 from pydantic import SecretStr, ValidationError
 
-from codeintel import CodeIntelligenceRuntime, ExplorationDepth, ExplorationPreparation, load_lsp_providers
+from codeintel import CodeIndexError, CodeIntelligenceRuntime, ExplorationDepth, ExplorationPreparation, load_lsp_providers
 from llm.base import ModelAdapter, ModelRequest
 from llm.capabilities import load_capabilities_snapshot
 from llm.contracts import ModelResponse, ToolCall
@@ -222,6 +222,11 @@ from runtime.workflow_support import (
     parse_goal_command,
     resolve_plan_approval,
     scope_expansion_replanning_objective,
+)
+from runtime.workspace import (
+    WorkspaceSelectionError,
+    native_workspace,
+    resolve_workspace_selection,
 )
 
 try:
@@ -445,7 +450,7 @@ SLASH_COMMANDS = {
     "/mcp": "Mostra providers MCP, conexão, capabilities e policy",
     "/browser": "Mostra o BrowserProvider/Herd sem duplicar sua interface",
     "/herdr": "Mostra o backend opcional Herdr e o fallback local",
-    "/workspace": "Mostra o workspace base de escrita/execução",
+    "/workspace": "Mostra ou troca o workspace: /workspace <caminho>",
     "/save": "Salva resumo da sessão em historico/",
     "/clear": "Limpa o histórico da conversa",
     "/exit": "Sai do agente",
@@ -620,8 +625,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--workspace",
-        default=".",
-        help="Diretório base para caminhos relativos, escrita e execução local. Padrão: diretório atual.",
+        default=None,
+        help=(
+            "Diretório base para caminhos relativos, escrita e execução local. "
+            "Padrão: WorkSpaceNativo da distribuição."
+        ),
     )
     parser.add_argument(
         "--api-key-file",
@@ -783,6 +791,39 @@ def resolve_workspace_path(workspace: Path, value: str) -> Path:
     if not path.is_absolute():
         path = workspace / path
     return path.resolve()
+
+
+def rebind_workspace_config(config: AgentConfig, workspace: Path) -> AgentConfig:
+    """Rebind workspace-owned context resources while preserving explicit paths."""
+
+    target = workspace.resolve(strict=True)
+    if not target.is_dir():
+        raise NotADirectoryError(f"Workspace não é diretório: {target}")
+    resource_root = (config.resource_root or Path(__file__).resolve().parent).resolve()
+    old_workspace = config.workspace.resolve()
+
+    def rebind_default(current: Path, default_name: str) -> Path:
+        resolved = current.resolve(strict=False)
+        default_candidates = {
+            (old_workspace / default_name).resolve(strict=False),
+            (resource_root / default_name).resolve(strict=False),
+        }
+        if resolved not in default_candidates:
+            return current
+        return resolve_resource_path(
+            default_name,
+            workspace=target,
+            packaged_default=True,
+            package_root=resource_root,
+        )
+
+    return replace(
+        config,
+        workspace=target,
+        agents_file=rebind_default(config.agents_file, "AGENTS.md"),
+        skills_dir=rebind_default(config.skills_dir, "skills"),
+        profiles_dir=rebind_default(config.profiles_dir, DEFAULT_PROFILES_DIR),
+    )
 
 
 def ensure_path_inside_workspace(workspace: Path, path: Path) -> None:
@@ -1086,7 +1127,14 @@ def build_client(
         model=model,
         base_url=provider_config.base_url,
     )
-    required = ("simple_chat", "tools", "reasoning_none", "reasoning_max", "no_openai_network")
+    required = (
+        "simple_chat",
+        "tools",
+        "reasoning_none",
+        "reasoning_max",
+        "reasoning_max_only",
+        "no_openai_network",
+    )
     unavailable = [name for name in required if not capabilities.supports(name)]
     if unavailable:
         raise ValueError(
@@ -4661,6 +4709,12 @@ async def run_plan_execution(
             )
         resume_results = journal.seed_completed_results(run_id, plan=plan)
     durable_run_id = durable_run.run_id
+    plan_task_ids = {task.task_id for task in plan.tasks}
+    plan_resume_results = {
+        task_id: result
+        for task_id, result in resume_results.items()
+        if task_id in plan_task_ids
+    }
 
     if max_repairs < 0 or max_repairs > MAX_REPAIR_ATTEMPTS:
         raise ValueError(f"max_repairs precisa estar entre 0 e {MAX_REPAIR_ATTEMPTS}.")
@@ -4687,7 +4741,7 @@ async def run_plan_execution(
     )
     result_protocol = AgentResultFunctionProtocol(max_repairs=1)
     schemas.append(result_protocol.function_schema())
-    dependency_results: dict[str, AgentResult] = dict(resume_results)
+    dependency_results: dict[str, AgentResult] = dict(plan_resume_results)
     repair_feedback = ""
 
     async def _execute_task_body(spec: TaskSpec, attempt: int) -> AgentResult:
@@ -4872,7 +4926,7 @@ async def run_plan_execution(
                 )
 
         seeded_results = (
-            dict(resume_results)
+            dict(plan_resume_results)
             if repair_attempt == 0
             else {
                 task_id: result
@@ -5066,6 +5120,11 @@ async def run_plan_execution(
                         task_executor=execute_task,
                         reviewer=convergence_reviewer,
                         analyze=analyze_result,
+                        repair_task_registrar=lambda tasks: journal.register_tasks(
+                            durable_run_id,
+                            tuple(tasks),
+                        ),
+                        recovered_results=resume_results,
                         event_bus=event_bus,
                         max_concurrency=max(1, config.max_subagents),
                     )
@@ -6063,7 +6122,7 @@ async def agent_loop(
     metrics: LocalMetricsCollector | None = None,
     codeintel_runtime: CodeIntelligenceRuntime | None = None,
     terminal_ui: TerminalUI | None = None,
-) -> None:
+) -> AgentConfig | None:
     operational_state = operational_state or OperationalState()
     metrics = metrics or LocalMetricsCollector()
     profile_names = sorted(agent_profiles)
@@ -6088,7 +6147,6 @@ async def agent_loop(
         temperature=temperature,
     )
     checkpoint_manager = CheckpointManager(config.workspace)
-    mcp_registry = MCPRegistry(event_bus=event_bus, artifact_store=context_engine.artifact_store)
     herdr_backend = HerdrTerminalBackend(probe_cwd=Path(config.workspace))
     governance = RuntimeGovernance.for_workspace(
         config.workspace,
@@ -6097,6 +6155,12 @@ async def agent_loop(
             for document in (spec_context.documents if spec_context is not None else ())
             if document.category is SpecKitCategory.CONSTITUTION
         )
+    )
+    mcp_registry = MCPRegistry(
+        policy_engine=governance.policy_engine,
+        hooks=governance.hooks,
+        event_bus=event_bus,
+        artifact_store=context_engine.artifact_store,
     )
     tools_runner = WorkspaceTools(
         config,
@@ -6272,6 +6336,14 @@ async def agent_loop(
                     reuse=True,
                     synthesize=True,
                 )
+            except CodeIndexError as exc:
+                print_labeled(
+                    "Explore>",
+                    f"{exc}. Selecione uma pasta de projeto menor com /workspace <caminho>.",
+                    style="red",
+                    content_style="red",
+                )
+                continue
             except (OSError, ValueError, RuntimeError) as exc:
                 print_labeled("Explore>", str(exc), style="red", content_style="red")
                 continue
@@ -6792,9 +6864,41 @@ async def agent_loop(
         if command == "/artifacts":
             print(render_artifacts(context_engine.list_artifacts()))
             continue
-        if command == "/workspace":
-            print(f"{CYAN}{config.workspace}{RESET}")
-            continue
+        if command == "/workspace" or command.startswith("/workspace "):
+            workspace_value = user_input[len("/workspace"):].strip()
+            if not workspace_value:
+                print(f"{CYAN}{config.workspace}{RESET}")
+                continue
+            try:
+                selected_workspace = resolve_workspace_selection(
+                    workspace_value,
+                    current_workspace=config.workspace,
+                )
+                next_config = rebind_workspace_config(config, selected_workspace)
+            except (OSError, WorkspaceSelectionError, ValueError) as exc:
+                print_labeled("Workspace>", str(exc), style="red", content_style="red")
+                continue
+            if next_config.workspace == config.workspace:
+                print_labeled(
+                    "Workspace>",
+                    f"já está ativo: {config.workspace}",
+                    style="cyan",
+                    content_style="gray",
+                )
+                continue
+            if event_bus is not None:
+                await event_bus.emit(
+                    "workspace.change_requested",
+                    source=AGENT_NAME,
+                    payload={"status": "switching", "workspace": str(next_config.workspace)},
+                )
+            print_labeled(
+                "Workspace>",
+                f"alterado para {next_config.workspace}; contexto do projeto será recarregado.",
+                style="green",
+                content_style="green",
+            )
+            return next_config
         if command == "/tools":
             print(section("Tools", ((tool["function"]["name"], "available; policy checked at execution") for tool in tool_schemas)))
             continue
@@ -6932,8 +7036,12 @@ async def agent_loop(
 
 
 def build_config(args: argparse.Namespace) -> AgentConfig:
-    workspace = Path(args.workspace).resolve()
     resources = packaged_resources(Path(__file__))
+    workspace = (
+        native_workspace(resources.root, create=True)
+        if args.workspace is None
+        else Path(args.workspace).expanduser().resolve()
+    )
     api_key_file = resolve_user_file_path(args.api_key_file)
     model_alias_file = resolve_resource_path(
         args.model_alias_file,
@@ -7028,15 +7136,9 @@ async def run_runtime_session(
     terminal_ui: TerminalUI | None = None
     lsp_config = os.getenv(LSP_CONFIG_ENV, "").strip()
     lsp_providers = load_lsp_providers(lsp_config) if lsp_config else ()
-    codeintel_runtime = CodeIntelligenceRuntime(
-        config.workspace,
-        artifact_store=ArtifactStore(config.workspace),
-        event_bus=bus,
-        model_client=client,
-        model=model,
-        temperature=temperature,
-        lsp_providers=lsp_providers,
-    )
+    active_config = config
+    active_agent_profiles = agent_profiles
+    active_codeintel: CodeIntelligenceRuntime | None = None
     metrics_subscription = bus.subscribe(metrics)
     state_subscription = bus.subscribe(operational_state)
     if event_bus is None:
@@ -7049,26 +7151,50 @@ async def run_runtime_session(
     run_status = "completed"
     try:
         await bus.emit("run.started", source=AGENT_NAME, payload={"status": "running"})
-        await agent_loop(
-            client=client,
-            model=model,
-            model_resolution=model_resolution,
-            config=config,
-            temperature=temperature,
-            agent_profiles=agent_profiles,
-            event_bus=bus,
-            operational_state=operational_state,
-            metrics=metrics,
-            codeintel_runtime=codeintel_runtime,
-            terminal_ui=terminal_ui,
-        )
+        while True:
+            active_codeintel = CodeIntelligenceRuntime(
+                active_config.workspace,
+                artifact_store=ArtifactStore(active_config.workspace),
+                event_bus=bus,
+                model_client=client,
+                model=model,
+                temperature=temperature,
+                lsp_providers=lsp_providers,
+            )
+            try:
+                next_config = await agent_loop(
+                    client=client,
+                    model=model,
+                    model_resolution=model_resolution,
+                    config=active_config,
+                    temperature=temperature,
+                    agent_profiles=active_agent_profiles,
+                    event_bus=bus,
+                    operational_state=operational_state,
+                    metrics=metrics,
+                    codeintel_runtime=active_codeintel,
+                    terminal_ui=terminal_ui,
+                )
+            finally:
+                await active_codeintel.close()
+                active_codeintel = None
+            if next_config is None:
+                break
+            active_config = next_config
+            active_agent_profiles = load_agent_profiles(active_config)
+            configure_diagnostic_logging(active_config.workspace)
+            await bus.emit(
+                "workspace.changed",
+                source=AGENT_NAME,
+                payload={"status": "active", "workspace": str(active_config.workspace)},
+            )
     except BaseException:
         run_status = "failed"
         raise
     finally:
         await bus.emit("run.completed", source=AGENT_NAME, payload={"status": run_status})
         try:
-            LocalMetricsStore(config.workspace).save(metrics.snapshot())
+            LocalMetricsStore(active_config.workspace).save(metrics.snapshot())
         except OSError as exc:
             LOGGER.warning("runtime_metrics_save_failed error=%s", type(exc).__name__)
         bus.unsubscribe(metrics_subscription)
@@ -7077,7 +7203,8 @@ async def run_runtime_session(
             terminal_ui.close()
         for subscription in subscriptions:
             bus.unsubscribe(subscription)
-        await codeintel_runtime.close()
+        if active_codeintel is not None:
+            await active_codeintel.close()
         await client.close()
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -520,6 +520,8 @@ class ConvergenceEngine:
         reviewer: ReviewCallback,
         analyze: AnalyzeResult | None = None,
         evidence_provider: EvidenceProvider | None = None,
+        repair_task_registrar: Callable[[Sequence[TaskSpec]], Any] | None = None,
+        recovered_results: Mapping[str, AgentResult] | None = None,
         event_bus: EventBus | None = None,
         max_concurrency: int = 1,
     ) -> ConvergenceRun:
@@ -590,12 +592,21 @@ class ConvergenceEngine:
                         "task_count": len(result.repair_tasks),
                     },
                 )
+            if repair_task_registrar is not None:
+                await _resolve(repair_task_registrar(result.repair_tasks))
+            repair_ids = {task.task_id for task in result.repair_tasks}
+            seeded_repairs = {
+                task_id: recovered
+                for task_id, recovered in dict(recovered_results or {}).items()
+                if task_id in repair_ids
+            }
             scheduler = DAGScheduler(
                 result.repair_tasks,
                 task_executor,
                 max_concurrency=max_concurrency,
                 event_bus=event_bus,
                 source=f"convergence:{plan.reference}:pass:{pass_number + 1}",
+                initial_results=seeded_repairs,
             )
             repair_result = await scheduler.run()
             scheduler_results.append(repair_result)

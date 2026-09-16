@@ -180,6 +180,18 @@ async def run_live_probe(config: HuaweiMaaSConfig) -> ModelCapabilities:
             )
             return "reasoning_effort=max e thinking=enabled foram aceitos."
 
+        async def reasoning_max_only() -> str:
+            answer = await adapter.complete_text(
+                "Calcule 23 vezes 17 e responda somente com o número.",
+                reasoning_effort="max",
+                thinking_enabled=False,
+            )
+            if answer.strip() != "391":
+                raise CapabilityDegraded(
+                    "reasoning_effort=max com thinking=disabled respondeu, mas não respeitou a saída esperada."
+                )
+            return "reasoning_effort=max e thinking=disabled foram aceitos com resposta correta."
+
         async def json_object() -> str:
             value = await adapter.request_json_object(
                 'Retorne exatamente as chaves "status" com "JSON_OK" e "value" com 52.'
@@ -241,6 +253,7 @@ async def run_live_probe(config: HuaweiMaaSConfig) -> ModelCapabilities:
         await _record(capabilities, "parallel_tools", parallel_tools, success_detail="OK")
         await _record(capabilities, "reasoning_none", reasoning_none, success_detail="OK")
         await _record(capabilities, "reasoning_max", reasoning_max, success_detail="OK")
+        await _record(capabilities, "reasoning_max_only", reasoning_max_only, success_detail="OK")
         await _record(capabilities, "json_object", json_object, success_detail="OK")
         await _record(capabilities, "json_schema", json_schema, success_detail="OK")
         await _record(capabilities, "structured_fallback", structured_fallback, success_detail="OK")

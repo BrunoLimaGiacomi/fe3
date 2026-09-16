@@ -23,16 +23,19 @@ diretório deste repositório e execute:
 
 ```powershell
 .\setup.ps1
-.\AgenteGlobal\bin\agenteglobal.cmd --workspace .
+.\AgenteGlobal\bin\agenteglobal.cmd
 ```
 
 Depois do setup, também é possível abrir `Ativador de Agente.cmd` com dois
-cliques. O setup copia o ativador para a Área de Trabalho e registra somente o
-caminho da instalação em `%APPDATA%\AgenteGlobal\install-path.txt`, portanto a
-cópia funciona fora da pasta do código. Pelo CMD, use:
+cliques. O setup copia o ativador para a Área de Trabalho e instala um bootstrap
+PowerShell em `%APPDATA%\AgenteGlobal` que lê o caminho em UTF-8. Assim, nomes
+com espaços ou acentos funcionam fora da pasta do código sem pedir o caminho
+manualmente. O ativador e o bootstrap não transformam a Área de Trabalho ou o
+diretório atual em workspace: sem `--workspace`, o Core usa
+`AgenteGlobal/WorkSpaceNativo`. Para escolher outro local explicitamente, use:
 
 ```cmd
-AgenteGlobal\bin\agenteglobal.cmd --workspace .
+AgenteGlobal\bin\agenteglobal.cmd --workspace "C:\caminho\do\projeto"
 ```
 
 O `setup.ps1` instala, uma única vez e somente para o usuário atual do Windows,
@@ -184,6 +187,9 @@ Catálogos externos, inclusive `uolcs-inovacao-ai-resources`, são opcionais,
 fixados por commit e submetidos a allowlist, integridade, policy e aprovação.
 
 MCP é opt-in e `/mcp` mostra provider, conexão, capabilities, sessão e policy.
+`runtime/mcp_transport.py` fornece transporte stdio interoperável baseado no SDK
+oficial (`StdioMCPProvider`). O registro do comando/servidor continua explícito;
+o runtime não inicia servidores MCP encontrados no ambiente automaticamente.
 Herd é somente o `BrowserProvider` via MCP; páginas e resultados web são
 untrusted input. Herdr é um backend opcional de terminal/sessões persistentes;
 quando indisponível, o backend local é usado. O DAG Scheduler interno continua
@@ -207,12 +213,18 @@ AgenteGlobal/codeintel/ índice, parsing, LSP e exploração
 docs/               arquitetura, comandos, segurança e troubleshooting
 tests/              suíte automatizada
 benchmarks/         benchmark regressivo offline
+.github/workflows/  CI Windows para instalação e suíte local
 .venv/              ambiente opcional de desenvolvimento (`-DevelopmentVenv`)
 ```
 
 O workspace indicado em `--workspace` é a fronteira de leitura, escrita,
-execução e artifacts do trabalho. A distribuição fornece defaults read-only;
-ela não é um segundo workspace de ferramentas.
+execução e artifacts do trabalho. Sem esse parâmetro, a pasta nativa
+`AgenteGlobal/WorkSpaceNativo` é usada. Durante a sessão, `/workspace` sem
+argumento mostra o local ativo; `/workspace <caminho>` troca para uma pasta
+existente ou para a pasta pai de um arquivo. A troca encerra recursos LSP do
+projeto anterior e recarrega contexto, Skills e perfis locais no novo local. A
+distribuição fornece defaults read-only; ela não é um segundo workspace de
+ferramentas.
 
 ## Documentação
 
@@ -228,7 +240,7 @@ ela não é um segundo workspace de ferramentas.
 
 ```powershell
 py -3 -m unittest discover -s tests -v
-py -3 -m compileall -q AgenteGlobal
+py -3 -m compileall -q AgenteGlobal tests benchmarks
 py -3 -m pip check
 git diff --check
 ```

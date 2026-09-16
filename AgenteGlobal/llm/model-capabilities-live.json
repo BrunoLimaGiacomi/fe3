@@ -39,6 +39,11 @@
     "detail": "reasoning_effort=max e thinking=enabled foram aceitos.",
     "latency_ms": 9250
   },
+  "reasoning_max_only": {
+    "status": "supported",
+    "detail": "reasoning_effort=max e thinking=disabled foram revalidados ao vivo em 2026-09-16 com resposta correta para 23 x 17.",
+    "latency_ms": 9395
+  },
   "json_object": {
     "status": "supported",
     "detail": "response_format=json_object retornou objeto JSON válido.",
@@ -82,5 +87,5 @@
   "max_output_tokens": 131072,
   "output_reserve_tokens": 8192,
   "limits_source": "https://support.huaweicloud.com/intl/en-us/bulletin-maas/bulletin-maas-0001.html; https://support.huaweicloud.com/intl/en-us/model-call-maas/usermanual_maas_0008.html",
-  "limits_observation": "Janela operacional configurada em 1M para glm-5.2 por decisão explícita do operador. Reserva 8K para output, dentro do máximo publicado de 128K. O novo limite e a combinação reasoning=max com thinking=disabled ainda requerem revalidação live."
+  "limits_observation": "Janela operacional configurada em 1M para glm-5.2 por decisão explícita do operador. Reserva 8K para output, dentro do máximo publicado de 128K. MAX_ONLY foi revalidado ao vivo em 2026-09-16; a janela de 1M ainda não foi exercitada integralmente."
 }
